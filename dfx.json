@@ -1,0 +1,9 @@
+{
+  "canisters": {
+    "agent_vault": {
+      "main": "src/Main.mo",
+      "type": "motoko"
+    }
+  },
+  "version": 1
+}

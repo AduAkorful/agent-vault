@@ -1,0 +1,10 @@
+node_modules/
+.dfx/
+.mops/
+dist/
+.DS_Store
+*.log
+
+# Local-only working docs (not tracked)
+plans/
+AGENTS.md
