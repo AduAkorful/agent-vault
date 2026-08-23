@@ -1,0 +1,15 @@
+{
+  "format": 2,
+  "app": "agent_vault",
+  "memory": {
+    "agentvault": {
+      "schemas": {
+        "1": {
+          "hash": "59292f74622908a5088fd9b1e4c2f960129cd1515577323e86ab70ce2651656a",
+          "entry": "9b23fc1ad9ef672444dd145f165364c7ffb13f44294f59a00b8360fcc5d15d89"
+        }
+      },
+      "migrations": {}
+    }
+  }
+}

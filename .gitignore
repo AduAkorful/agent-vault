@@ -1,10 +1,29 @@
+# Dependencies & build output
 node_modules/
 .dfx/
 .mops/
 dist/
 .DS_Store
 *.log
+test-results/
 
-# Local-only working docs (not tracked)
+# Local planning docs
 plans/
 AGENTS.md
+
+# Ignore upstream Neutron monorepo internals, but preserve Agent Vault app & E2E tests
+neutron/*
+!neutron/apps/
+neutron/apps/*
+!neutron/apps/agent_vault/
+!neutron/test/
+neutron/test/*
+!neutron/test/e2e/
+neutron/test/e2e/*
+!neutron/test/e2e/agent-vault.spec.ts
+!neutron/local.ndeploy.json
+
+# Ignore app-level build artifacts inside agent_vault
+neutron/apps/agent_vault/dist/
+neutron/apps/agent_vault/node_modules/
+neutron/apps/agent_vault/.mops/

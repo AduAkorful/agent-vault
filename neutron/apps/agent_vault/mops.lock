@@ -1,0 +1,17 @@
+{
+  "version": 3,
+  "mopsTomlDepsHash": "630f3ef3d2e14eeffdb34b1a86307747e9c6cc12dc8d3e255b44867a7f7ba2e3",
+  "localDepsHash": "a9601d0c843597acadc61322faa46793aaf9a2f642bb736ff179a0483ba11175",
+  "deps": {
+    "core": "https://github.com/dfinity/motoko-core#v2.6.0",
+    "neutron-capabilities": "../../packages/neutron-motoko-capabilities"
+  },
+  "graph": {},
+  "github": {
+    "core": {
+      "resolved": "f8daac747ac6ac8e663a44b79891ee0613796d76",
+      "hash": "20b78b204feeeb341af850244f1a2ba33c40e33e64650d79d1c1086103b69d94"
+    }
+  },
+  "hashes": {}
+}

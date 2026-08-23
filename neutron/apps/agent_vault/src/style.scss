@@ -1,0 +1,658 @@
+@use "neutron-design-system/styles.scss";
+
+@layer nt.tokens, nt.base, nt.layout, nt.components, nt.utilities, app;
+
+@layer app {
+  // -----------------------------------------------------------------------
+  // App root
+  // -----------------------------------------------------------------------
+  .nt-app.vault-app {
+    --vault-accent: #89e0aa;
+    --vault-accent-muted: #193525;
+    --vault-danger: #e05858;
+    --vault-danger-muted: #3d1919;
+    --vault-warn: #e0b858;
+    --vault-warn-muted: #3d2f19;
+    --vault-success: #89e0aa;
+    --vault-success-muted: #193525;
+    --vault-escalation: #e0b858;
+    --vault-forbidden: #e05858;
+    --vault-autonomous: #89e0aa;
+    --nt-accent: var(--vault-accent);
+    --nt-accent-muted: var(--vault-accent-muted);
+    container-type: inline-size;
+    min-height: 100dvh;
+    padding: var(--nt-pad-4);
+  }
+
+  // -----------------------------------------------------------------------
+  // Shell
+  // -----------------------------------------------------------------------
+  .vault-shell {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nt-gap-4);
+    margin: 0 auto;
+    max-width: 1080px;
+    min-height: calc(100dvh - (var(--nt-pad-4) * 2));
+    width: 100%;
+  }
+
+  // -----------------------------------------------------------------------
+  // Navigation
+  // -----------------------------------------------------------------------
+  .vault-nav {
+    display: flex;
+    gap: var(--nt-gap-2);
+    border-bottom: 1px solid var(--nt-border);
+    padding-bottom: var(--nt-pad-2);
+    flex-wrap: wrap;
+  }
+
+  .vault-nav-btn {
+    all: unset;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: var(--nt-gap-1);
+    padding: var(--nt-pad-2) var(--nt-pad-3);
+    border-radius: var(--nt-radius-sm);
+    font-size: var(--nt-font-size-sm);
+    font-weight: 500;
+    color: var(--nt-text-muted);
+    transition: color 0.15s ease, background 0.15s ease;
+    position: relative;
+
+    &:hover {
+      color: var(--nt-text);
+      background: var(--nt-surface-raised);
+    }
+
+    &--active {
+      color: var(--vault-accent);
+
+      &::after {
+        content: "";
+        position: absolute;
+        bottom: calc(-1 * var(--nt-pad-2) - 1px);
+        left: var(--nt-pad-3);
+        right: var(--nt-pad-3);
+        height: 2px;
+        background: var(--vault-accent);
+        border-radius: 1px;
+      }
+    }
+  }
+
+  .vault-nav-icon {
+    font-size: 1.1em;
+  }
+
+  .vault-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--vault-danger);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  // -----------------------------------------------------------------------
+  // Error banner
+  // -----------------------------------------------------------------------
+  .vault-error {
+    display: flex;
+    align-items: center;
+    gap: var(--nt-gap-2);
+    padding: var(--nt-pad-3);
+    background: var(--vault-danger-muted);
+    border: 1px solid var(--vault-danger);
+    border-radius: var(--nt-radius-sm);
+    color: var(--nt-text);
+    font-size: var(--nt-font-size-sm);
+  }
+
+  .vault-error-icon {
+    flex-shrink: 0;
+    color: var(--vault-danger);
+  }
+
+  .vault-error-dismiss {
+    all: unset;
+    cursor: pointer;
+    margin-left: auto;
+    padding: 2px 6px;
+    border-radius: var(--nt-radius-sm);
+    color: var(--nt-text-muted);
+
+    &:hover {
+      color: var(--nt-text);
+      background: var(--nt-surface-raised);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Banners
+  // -----------------------------------------------------------------------
+  .vault-banner {
+    padding: var(--nt-pad-3);
+    border-radius: var(--nt-radius-sm);
+    font-size: var(--nt-font-size-sm);
+
+    &--lock {
+      background: var(--vault-warn-muted);
+      border: 1px solid var(--vault-warn);
+      color: var(--vault-warn);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Loading
+  // -----------------------------------------------------------------------
+  .vault-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--nt-gap-3);
+    padding: var(--nt-pad-8) 0;
+  }
+
+  .vault-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--nt-border);
+    border-top-color: var(--vault-accent);
+    border-radius: 50%;
+    animation: vault-spin 0.8s linear infinite;
+  }
+
+  @keyframes vault-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  // -----------------------------------------------------------------------
+  // Content area
+  // -----------------------------------------------------------------------
+  .vault-content {
+    flex: 1;
+  }
+
+  // -----------------------------------------------------------------------
+  // Panels (shared)
+  // -----------------------------------------------------------------------
+  .vault-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nt-gap-4);
+  }
+
+  .vault-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--nt-gap-2);
+  }
+
+  .vault-panel-title {
+    font-size: var(--nt-font-size-lg);
+    color: var(--nt-text);
+  }
+
+  .vault-empty {
+    padding: var(--nt-pad-6);
+    text-align: center;
+    color: var(--nt-text-muted);
+    border: 1px dashed var(--nt-border);
+    border-radius: var(--nt-radius-sm);
+  }
+
+  // -----------------------------------------------------------------------
+  // Portfolio — budget bars
+  // -----------------------------------------------------------------------
+  .vault-budgets {
+    display: grid;
+    gap: var(--nt-gap-3);
+    grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  }
+
+  .vault-budget {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nt-gap-1);
+    padding: var(--nt-pad-3);
+    background: var(--nt-surface-raised);
+    border-radius: var(--nt-radius-sm);
+  }
+
+  .vault-budget-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: var(--nt-font-size-sm);
+    color: var(--nt-text-muted);
+  }
+
+  .vault-budget-ratio {
+    font-variant-numeric: tabular-nums;
+    font-family: var(--nt-font-mono);
+    font-size: var(--nt-font-size-xs);
+  }
+
+  .vault-budget-track {
+    height: 6px;
+    background: var(--nt-border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .vault-budget-fill {
+    height: 100%;
+    background: var(--vault-accent);
+    border-radius: 3px;
+    transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+
+    &--warn {
+      background: var(--vault-warn);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Portfolio — token cards
+  // -----------------------------------------------------------------------
+  .vault-token-grid {
+    display: grid;
+    gap: var(--nt-gap-3);
+    grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+  }
+
+  .vault-token-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nt-gap-2);
+    padding: var(--nt-pad-4);
+    background: var(--nt-surface-raised);
+    border: 1px solid var(--nt-border);
+    border-radius: var(--nt-radius-md);
+    transition: border-color 0.15s ease;
+
+    &:hover {
+      border-color: var(--vault-accent-muted);
+    }
+  }
+
+  .vault-token-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .vault-token-symbol {
+    font-weight: 700;
+    font-size: var(--nt-font-size-md);
+    color: var(--vault-accent);
+  }
+
+  .vault-token-amount {
+    font-size: 1.5rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--nt-text);
+    font-family: var(--nt-font-mono);
+  }
+
+  .vault-token-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: var(--nt-font-size-xs);
+    color: var(--nt-text-faint);
+  }
+
+  .vault-sync-btn {
+    align-self: flex-end;
+  }
+
+  // -----------------------------------------------------------------------
+  // Policy panel
+  // -----------------------------------------------------------------------
+  .vault-policy-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nt-gap-3);
+    padding: var(--nt-pad-4);
+    background: var(--nt-surface-raised);
+    border-radius: var(--nt-radius-md);
+  }
+
+  .vault-section-title {
+    font-size: var(--nt-font-size-sm);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--nt-text-muted);
+  }
+
+  .vault-policy-grid {
+    display: grid;
+    gap: var(--nt-gap-3);
+    grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
+  }
+
+  .vault-policy-metric {
+    text-align: center;
+  }
+
+  .vault-allowlist-detail {
+    font-size: var(--nt-font-size-sm);
+    color: var(--nt-text-muted);
+
+    summary {
+      cursor: pointer;
+      color: var(--vault-accent);
+
+      &:hover {
+        text-decoration: underline;
+      }
+    }
+  }
+
+  .vault-principal-list {
+    list-style: none;
+    padding: var(--nt-pad-2) 0 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--nt-gap-1);
+
+    li {
+      padding: 2px 8px;
+      background: var(--nt-surface);
+      border-radius: var(--nt-radius-sm);
+      font-family: var(--nt-font-mono);
+      font-size: var(--nt-font-size-xs);
+    }
+  }
+
+  .vault-circuit-breaker {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--nt-gap-3);
+    flex-wrap: wrap;
+  }
+
+  .vault-cb-status {
+    display: flex;
+    align-items: center;
+    gap: var(--nt-gap-2);
+    font-size: var(--nt-font-size-sm);
+  }
+
+  .vault-cb-indicator {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+
+    &--active {
+      background: var(--vault-danger);
+      box-shadow: 0 0 6px var(--vault-danger);
+      animation: vault-pulse 1.5s ease-in-out infinite;
+    }
+
+    &--inactive {
+      background: var(--vault-success);
+    }
+  }
+
+  @keyframes vault-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .vault-failure-counter {
+    font-size: var(--nt-font-size-xs);
+    color: var(--nt-text-muted);
+    font-family: var(--nt-font-mono);
+  }
+
+  // -----------------------------------------------------------------------
+  // Activity feed
+  // -----------------------------------------------------------------------
+  .vault-activity-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nt-gap-2);
+  }
+
+  .vault-activity-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nt-gap-1);
+    padding: var(--nt-pad-3);
+    background: var(--nt-surface-raised);
+    border-radius: var(--nt-radius-sm);
+    border-left: 3px solid var(--nt-border);
+    transition: border-color 0.15s ease;
+
+    &:hover {
+      border-left-color: var(--vault-accent);
+    }
+  }
+
+  .vault-activity-head {
+    display: flex;
+    align-items: center;
+    gap: var(--nt-gap-2);
+    flex-wrap: wrap;
+  }
+
+  .vault-tier-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--nt-radius-sm);
+    font-size: var(--nt-font-size-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+
+    &.vault-tier--autonomous {
+      background: var(--vault-success-muted);
+      color: var(--vault-autonomous);
+    }
+
+    &.vault-tier--escalation {
+      background: var(--vault-warn-muted);
+      color: var(--vault-escalation);
+    }
+
+    &.vault-tier--forbidden {
+      background: var(--vault-danger-muted);
+      color: var(--vault-forbidden);
+    }
+  }
+
+  .vault-activity-type {
+    font-weight: 600;
+    font-size: var(--nt-font-size-sm);
+    color: var(--nt-text);
+  }
+
+  .vault-activity-time {
+    margin-left: auto;
+    font-size: var(--nt-font-size-xs);
+    color: var(--nt-text-faint);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .vault-activity-body {
+    display: flex;
+    align-items: center;
+    gap: var(--nt-gap-2);
+    flex-wrap: wrap;
+  }
+
+  .vault-activity-detail {
+    font-size: var(--nt-font-size-sm);
+    color: var(--nt-text-muted);
+    font-family: var(--nt-font-mono);
+  }
+
+  .vault-activity-note {
+    font-size: var(--nt-font-size-xs);
+    color: var(--nt-text-faint);
+    font-style: italic;
+  }
+
+  // -----------------------------------------------------------------------
+  // Approvals inbox
+  // -----------------------------------------------------------------------
+  .vault-approvals-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nt-gap-3);
+  }
+
+  .vault-ticket {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nt-gap-2);
+    padding: var(--nt-pad-4);
+    background: var(--nt-surface-raised);
+    border: 1px solid var(--vault-warn-muted);
+    border-radius: var(--nt-radius-md);
+    transition: border-color 0.15s ease;
+
+    &:hover {
+      border-color: var(--vault-warn);
+    }
+  }
+
+  .vault-ticket-header {
+    display: flex;
+    align-items: center;
+    gap: var(--nt-gap-2);
+    flex-wrap: wrap;
+  }
+
+  .vault-ticket-id {
+    font-weight: 700;
+    color: var(--vault-warn);
+  }
+
+  .vault-ticket-time {
+    margin-left: auto;
+    font-size: var(--nt-font-size-xs);
+    color: var(--nt-text-faint);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .vault-ticket-detail {
+    font-family: var(--nt-font-mono);
+    font-size: var(--nt-font-size-sm);
+    color: var(--nt-text-muted);
+  }
+
+  .vault-ticket-reason {
+    font-size: var(--nt-font-size-xs);
+    color: var(--nt-text-faint);
+
+    code {
+      color: var(--vault-warn);
+    }
+  }
+
+  .vault-ticket-actions {
+    display: flex;
+    gap: var(--nt-gap-2);
+    margin-top: var(--nt-pad-1);
+  }
+
+  // -----------------------------------------------------------------------
+  // Shared button variants
+  // -----------------------------------------------------------------------
+  .vault-btn-success {
+    --nt-accent: var(--vault-success);
+    --nt-accent-muted: var(--vault-success-muted);
+  }
+
+  .vault-btn-danger {
+    --nt-accent: var(--vault-danger);
+    --nt-accent-muted: var(--vault-danger-muted);
+  }
+
+  // -----------------------------------------------------------------------
+  // Footer
+  // -----------------------------------------------------------------------
+  .vault-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--nt-gap-3);
+    padding-top: var(--nt-pad-3);
+    border-top: 1px solid var(--nt-border);
+    margin-top: auto;
+  }
+
+  .vault-context {
+    font-size: var(--nt-font-size-meta);
+    color: var(--nt-text-faint);
+  }
+
+  // -----------------------------------------------------------------------
+  // Responsive
+  // -----------------------------------------------------------------------
+  @container (max-width: 600px) {
+    .vault-nav {
+      gap: var(--nt-gap-1);
+    }
+
+    .vault-nav-label {
+      display: none;
+    }
+
+    .vault-nav-btn {
+      padding: var(--nt-pad-2);
+    }
+
+    .vault-token-amount {
+      font-size: 1.2rem;
+    }
+  }
+
+  @container (max-width: 400px) {
+    .nt-app.vault-app {
+      padding: var(--nt-pad-3);
+    }
+
+    .vault-shell {
+      gap: var(--nt-gap-3);
+    }
+
+    .vault-activity-time,
+    .vault-ticket-time {
+      margin-left: 0;
+      width: 100%;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Tag variants (extend NDS)
+  // -----------------------------------------------------------------------
+  .nt-tag--danger {
+    background: var(--vault-danger-muted);
+    color: var(--vault-danger);
+  }
+
+  .nt-tag--success {
+    background: var(--vault-success-muted);
+    color: var(--vault-success);
+  }
+}

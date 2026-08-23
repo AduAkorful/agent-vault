@@ -1,0 +1,139 @@
+{
+  "format": 3,
+  "id": "agent_vault",
+  "name": "Agent Vault",
+  "version": 100,
+  "update_source": "233tv-xiaaa-aaaay-aacta-cai",
+  "description": "Policy-governed vault: agents propose, humans approve, real ICRC-1 settlement",
+  "src": "main.mo",
+  "backend": {
+    "capabilities": {
+      "backend_calls": {
+        "api": 1
+      }
+    }
+  },
+  "background": {
+    "path": "service.html",
+    "description": "Resident Agent Vault overview and settlement service"
+  },
+  "capabilities": {
+    "backend_calls": {
+      "api": 1,
+      "description": "Connect to owner-approved ICRC-1 token ledger canisters for real settlement",
+      "reservation_scopes": [
+        "principal"
+      ],
+      "install_reservations": [
+        {
+          "kind": "principal",
+          "principal": "ryjl3-tyaaa-aaaaa-aaaba-cai"
+        },
+        {
+          "kind": "principal",
+          "principal": "mxzaz-hqaaa-aaaar-qaada-cai"
+        },
+        {
+          "kind": "principal",
+          "principal": "xevnm-gaaaa-aaaar-qafnq-cai"
+        }
+      ],
+      "max_concurrency": 4,
+      "max_cycles_per_call": 0,
+      "max_cycles_per_day": 0
+    },
+    "preapproved_self_calls": {
+      "api": 1,
+      "methods": [
+        "getVaultState",
+        "getActivityHistory",
+        "getPendingApprovals",
+        "syncBalance",
+        "proposeTransfer",
+        "approveTicket",
+        "rejectTicket",
+        "setPolicy",
+        "setCircuitBreaker"
+      ]
+    },
+    "agent_entrypoints": {
+      "api": 1,
+      "entrypoints": [
+        "get_vault_state",
+        "get_activity_history",
+        "sync_balance",
+        "propose_transfer"
+      ]
+    }
+  },
+  "tiles": [
+    {
+      "id": "dashboard",
+      "title": "Agent Vault",
+      "path": "index.html",
+      "icon": "static/icon.png",
+      "description": "Portfolio, policy, agent audit feed, and pending approvals"
+    }
+  ],
+  "func": {
+    "getVaultState": {
+      "type": "query",
+      "async": false
+    },
+    "getActivityHistory": {
+      "type": "query",
+      "async": false
+    },
+    "getPendingApprovals": {
+      "type": "query",
+      "async": false
+    },
+    "syncBalance": {
+      "type": "update",
+      "async": "async*"
+    },
+    "proposeTransfer": {
+      "type": "update",
+      "async": "async*"
+    },
+    "proposeSwap": {
+      "type": "update",
+      "async": "async*"
+    },
+    "approveTicket": {
+      "type": "update",
+      "async": "async*"
+    },
+    "rejectTicket": {
+      "type": "update",
+      "async": false
+    },
+    "setDexConfig": {
+      "type": "update",
+      "async": false
+    },
+    "recoverSettlementLock": {
+      "type": "update",
+      "async": false
+    },
+    "setPolicy": {
+      "type": "update",
+      "async": false
+    },
+    "setCircuitBreaker": {
+      "type": "update",
+      "async": false
+    }
+  },
+  "memory": {
+    "agentvault": {
+      "version": 1,
+      "schemas": {
+        "1": {
+          "src": "memory/agentvault/v1.mo"
+        }
+      },
+      "migrations": []
+    }
+  }
+}
