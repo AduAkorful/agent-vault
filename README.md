@@ -1,148 +1,67 @@
 # Agent Vault
 
-> **Sovereign Financial Execution & Policy Guardrail Environment for Autonomous AI Agents on Neutron (Internet Computer)**
+Agent Vault is a self-custodial Neutron application for policy-governed financial execution on the Internet Computer. Agents can propose and, within owner-defined limits, autonomously settle transfers. Every swap is parked for explicit owner approval and then executes a real ICRC-2 + ICPSwap round trip.
 
----
+There is one production implementation: `neutron/apps/agent_vault/`. The old standalone Motoko actor and local fixture harness were removed so no reference implementation, demo path, or generated fallback can be mistaken for the product.
 
-## ◈ Overview
+## Safety model
 
-**Agent Vault** is a self-custodial financial execution environment and policy guardrail engine that allows autonomous AI agents to manage funds safely under user-defined on-chain rules.
+- Funds are held in a deterministic, non-zero 32-byte vault subaccount, not the shared canister default account.
+- Transfer budgets are per token and fee-inclusive. Token decimals and fees are read from each ledger.
+- Autonomous transfers require both a configured token limit and an allowlisted recipient.
+- Swaps always require owner approval, even when the DEX and token pair are allowlisted.
+- Swap settlement discovers the pool from the verified ICPSwap factory and performs: isolated vault → default transit → ICRC-2 approval → `depositFromAndSwap` → pool withdrawal → isolated vault.
+- Every ICRC ledger leg has a durable `created_at_time` + memo key. Duplicate results are treated as authoritative success, not retried as new payments.
+- Unknown pool outcomes are never blindly replayed. Recovery inspects exact default-account and pool balances, revokes live approval when necessary, and only moves uniquely identified funds.
+- Backend-call authority is narrowed to exact ledger/factory methods plus the minimum dynamic pool method scopes.
+- Policy defaults are empty and fail closed. There are no seeded balances, tickets, receipts, demo fixtures, or silent data fallbacks.
 
-By eliminating the binary trade-off between total agent autonomy (dangerous) and constant human prompting (inefficient), Agent Vault introduces a **3-tier execution model**:
+## Product surfaces
 
-1. **Tier 1 (Autonomous Execution)**: Instant settlement for low-risk transactions within velocity limits and allowlisted targets.
-2. **Tier 2 (Human Escalation)**: Over-limit or unverified operations automatically park in a pending inbox for 1-click human approval.
-3. **Tier 3 (Forbidden)**: Forbidden operations (circuit breaker active, unauthorized targets, invalid slippage) are immediately blocked on-chain with detailed audit logs.
+The React dashboard provides live token balances and the exact deposit owner/subaccount, per-token budget gauges, editable policy controls, bounded audit history, and pending-ticket approval/rejection.
 
----
+The resident agent service exposes four typed tools: `get_vault_state`, `get_activity_history`, `sync_balance`, and `propose_transfer`. Owner-only policy, approval, swap, DEX configuration, and recovery methods are excluded from the agent surface.
 
-## ⛨ Dual-Surface Architecture
+## Repository layout
 
-Agent Vault strictly decouples the **Human Surface** (Web Dashboard) and the **Agent Surface** (Resident Tool Interface), both operating on a shared Motoko policy core with immutable managed memory.
-
-```
-                  ┌─────────────────────────────────┐
-                  │          VAULT OWNER            │
-                  │    (Internet Identity / Web)    │
-                  └───────────────┬─────────────────┘
-                                  │
-                       [ Human Surface: React 19 ]
-                                  │
-    ┌─────────────────────────────┼─────────────────────────────┐
-    │                             ▼                             │
-    │                   ┌───────────────────┐                   │
-    │                   │   POLICY ENGINE   │                   │
-    │                   │   (Motoko Core)   │                   │
-    │                   └─────────┬─────────┘                   │
-    │                             │                             │
-    │   [ Execution Tiers: Autonomous | Escalation | Blocked ]   │
-    │                             │                             │
-    │                             ▼                             │
-    │                   ┌───────────────────┐                   │
-    │                   │  ICRC SETTLEMENT  │                   │
-    │                   └─────────┬─────────┘                   │
-    │                             │                             │
-    └─────────────────────────────┼─────────────────────────────┘
-                                  ▲
-                       [ Agent Surface: Tools ]
-                                  │
-                  ┌───────────────┴─────────────────┐
-                  │       AUTONOMOUS AI AGENT       │
-                  │  (Typed Tool Interface / RPC)   │
-                  └─────────────────────────────────┘
-```
-
----
-
-## ✦ Dual Surface Features
-
-### 1. Human Surface (4-Panel Dashboard)
-- **◈ Portfolio Overview**: Real-time token balances (ICP, ckBTC, ckETH, ckUSDC), hourly/daily velocity budget gauges, and live per-token synchronization.
-- **⛨ Policy Control Matrix**: Velocity caps (per-transaction, hourly, daily limits), allowlist management, and an interactive on-chain **Circuit Breaker** toggle.
-- **◷ Live Agent Audit Feed**: Chronological execution logs tagged with execution tiers (<span style="color:#89e0aa">Autonomous</span>, <span style="color:#e5c07b">Escalation</span>, <span style="color:#e06c75">Forbidden</span>), transaction hashes, and agent notes.
-- **✓ Pending Approvals Inbox**: Dedicated queue for Tier-2 escalation tickets with 1-click **Approve** and **Reject** actions.
-
-### 2. Agent Surface (Resident Neutron Tools)
-Exposes 4 strictly-typed JSON/Candid tool endpoints conforming to the Neutron app entrypoint standard:
-1. `get_vault_state`: Query live balances, spend budget utilization, policy limits, and circuit breaker status.
-2. `get_activity_history`: Chronological audit trail of past agent proposals and settlement receipts.
-3. `sync_balance`: Sync on-chain balance from authorized ICRC-1/ICRC-2 token ledgers.
-4. `propose_transfer`: Propose a token transfer evaluated deterministically by the policy engine.
-
----
-
-## 🛠 Project Structure
-
-```
+```text
 agent-vault/
-├── neutron/                         # Neutron OS environment
-│   ├── apps/
-│   │   └── agent_vault/             # Agent Vault deliverable
-│   │       ├── backend/             # Motoko managed-memory core & ICRC client
-│   │       │   ├── memory/          # Immutable versioned memory schema (v1.mo)
-│   │       │   ├── icrc1/           # ICRC-1/2 client via backend_calls
-│   │       │   └── main.mo          # Neutron App Backend class
-│   │       ├── src/
-│   │       │   ├── index.tsx        # 4-panel React 19 dashboard tile
-│   │       │   ├── service.ts       # Resident agent tool surface
-│   │       │   └── style.scss       # NDS dark-theme stylesheet
-│   │       ├── public/              # Tile & service host bundles & icon
-│   │       ├── test/                # Unit, schema, & memory release tests
-│   │       ├── build.ts             # Multi-entry esbuild configuration
-│   │       ├── neutron.json         # Manifest (entrypoints, permissions, memory)
-│   │       └── agent_vault.v0.1.0.neutron  # Packaged 310 KB deliverable
-│   ├── test/e2e/agent-vault.spec.ts # Playwright E2E test on PocketIC
-│   └── local.ndeploy.json           # Local PocketIC deployment config
-├── src/                             # Standalone Motoko policy engine reference
-├── test/                            # M3 settlement integration test suite
-├── AGENTS.md                        # State register, development log, and ADRs
-└── README.md                        # Project documentation
+├── AGENTS.md
+├── README.md
+└── neutron/
+    ├── apps/agent_vault/
+    │   ├── backend/
+    │   ├── public/
+    │   ├── scripts/
+    │   ├── src/
+    │   ├── test/
+    │   ├── neutron.json
+    │   └── agent_vault.v0.1.0.neutron
+    ├── local.ndeploy.json
+    └── test/e2e/agent-vault.spec.ts
 ```
 
----
+## Build and verify
 
-## 🚀 Building & Testing
+Run from `neutron/`:
 
-### Prerequisites
-- Node.js & npm (v20+)
-- [Bun](https://bun.sh) (v1.1+)
-- [Mops](https://mops.one/) (Motoko package manager)
-
-### Build the Package
 ```bash
-cd neutron
 npm --workspace neutron-agent-vault run package
-```
-
-### Run Automated Tests
-```bash
-# Package, unit, schema, and Motoko memory release tests
 npm --workspace neutron-agent-vault test
-
-# Standalone M3 reference policy tests
-mops test
+cd apps/agent_vault
+../../node_modules/.bin/tsc -p tsconfig.app.json --noEmit
 ```
 
-### Run Locally on PocketIC
-```bash
-cd neutron
+The package command validates the manifest, builds both frontend entries, packages the Motoko roots, generates method schemas and metadata, and writes `agent_vault.v0.1.0.neutron`.
 
-# 1. Start the PocketIC supervisor in the background
-npm run local:start
+Current pre-release memory schema v1 hash:
 
-# 2. Deploy and install Agent Vault into the local user canister
-npm run local:deploy
-
-# 3. Check deployment status and open the printed URL
-npm run local:status
+```text
+a48ed7297bd53e070f1cf06017ac0e70544403cb218b6d0c7519cee4b5e7689a
 ```
 
-### Run End-to-End Playwright Simulation
-```bash
-cd neutron
-npx playwright test test/e2e/agent-vault.spec.ts
-```
+The schema is still being revised in place because no released package is installed live. After the first release, schema evolution must use a new version and migration rather than editing v1.
 
----
+## Clean install
 
-
+Deploy the package into a fresh managed-memory canister for a release or resubmission. Do not upgrade a canister that contains prior demo or test state. After installation, verify that the vault state has no balances, tickets, receipts, or audit entries, then fund only the displayed vault deposit subaccount.

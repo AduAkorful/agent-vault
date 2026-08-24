@@ -214,6 +214,52 @@
     border-radius: var(--nt-radius-sm);
   }
 
+  .vault-deposit-account {
+    display: grid;
+    gap: var(--nt-gap-3);
+    grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.2fr);
+    padding: var(--nt-pad-4);
+    background: var(--nt-surface-raised);
+    border-left: 3px solid var(--vault-accent);
+    border-radius: var(--nt-radius-sm);
+  }
+
+  .vault-deposit-copy {
+    margin: var(--nt-pad-1) 0 0;
+    color: var(--nt-text-muted);
+    font-size: var(--nt-font-size-sm);
+  }
+
+  .vault-deposit-values {
+    display: grid;
+    gap: var(--nt-gap-1) var(--nt-gap-3);
+    grid-template-columns: auto minmax(0, 1fr);
+    align-content: center;
+    margin: 0;
+    font-size: var(--nt-font-size-xs);
+  }
+
+  .vault-deposit-values dt {
+    color: var(--nt-text-faint);
+  }
+
+  .vault-deposit-values dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .vault-mono,
+  .vault-field input,
+  .vault-field textarea {
+    font-family: var(--nt-font-mono);
+  }
+
+  .vault-subaccount {
+    color: var(--vault-accent);
+    letter-spacing: 0.04em;
+  }
+
   // -----------------------------------------------------------------------
   // Portfolio — budget bars
   // -----------------------------------------------------------------------
@@ -328,6 +374,79 @@
     padding: var(--nt-pad-4);
     background: var(--nt-surface-raised);
     border-radius: var(--nt-radius-md);
+  }
+
+  .vault-safety-note {
+    display: flex;
+    gap: var(--nt-gap-2);
+    align-items: baseline;
+    padding: var(--nt-pad-3);
+    background: var(--vault-warn-muted);
+    border: 1px solid var(--vault-warn);
+    border-radius: var(--nt-radius-sm);
+    color: var(--nt-text);
+    font-size: var(--nt-font-size-sm);
+  }
+
+  .vault-safety-note strong {
+    color: var(--vault-warn);
+    white-space: nowrap;
+  }
+
+  .vault-inline-error {
+    padding: var(--nt-pad-3);
+    background: var(--vault-danger-muted);
+    border: 1px solid var(--vault-danger);
+    border-radius: var(--nt-radius-sm);
+    color: var(--vault-danger);
+    font-size: var(--nt-font-size-sm);
+  }
+
+  .vault-policy-editor-grid {
+    display: grid;
+    gap: var(--nt-gap-3);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .vault-limit-editor-head {
+    display: flex;
+    align-items: end;
+    gap: var(--nt-gap-2);
+  }
+
+  .vault-limit-editor-head .vault-field {
+    flex: 1;
+  }
+
+  .vault-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nt-gap-1);
+    color: var(--nt-text-muted);
+    font-size: var(--nt-font-size-xs);
+  }
+
+  .vault-field input,
+  .vault-field textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: var(--nt-pad-2);
+    color: var(--nt-text);
+    background: var(--nt-surface);
+    border: 1px solid var(--nt-border);
+    border-radius: var(--nt-radius-sm);
+    font-size: var(--nt-font-size-sm);
+  }
+
+  .vault-field input:focus,
+  .vault-field textarea:focus {
+    outline: 2px solid var(--vault-accent);
+    outline-offset: 1px;
+  }
+
+  .vault-field-help {
+    color: var(--nt-text-faint);
+    font-size: var(--nt-font-size-xs);
   }
 
   .vault-section-title {
@@ -624,6 +743,16 @@
 
     .vault-token-amount {
       font-size: 1.2rem;
+    }
+
+    .vault-deposit-account,
+    .vault-policy-editor-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .vault-safety-note {
+      align-items: flex-start;
+      flex-direction: column;
     }
   }
 

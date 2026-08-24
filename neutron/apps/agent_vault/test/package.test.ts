@@ -26,11 +26,15 @@ const UPDATE_METHODS = [
 // generated as `async*`; the remaining updates stay synchronous. mogen strips
 // the async* from the generated *_Output aliases, but the manifest records it on
 // the func entry, so the manifest assertion below splits on this set.
+// recoverSettlementLock awaits the ledger to reconcile a persisted intent (R8),
+// so it too is async* — a duplicate/#Ok on re-submit is what proves whether the
+// original debit committed, and that answer only comes from the ledger.
 const ASYNC_UPDATE_METHODS = new Set([
   "syncBalance",
   "proposeTransfer",
   "proposeSwap",
   "approveTicket",
+  "recoverSettlementLock",
 ]);
 
 async function readManifest(): Promise<NeutronManifest> {

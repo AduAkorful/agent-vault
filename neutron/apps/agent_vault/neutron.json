@@ -22,20 +22,135 @@
       "api": 1,
       "description": "Connect to owner-approved ICRC-1 token ledger canisters for real settlement",
       "reservation_scopes": [
-        "principal"
+        "exact",
+        "method"
       ],
       "install_reservations": [
         {
-          "kind": "principal",
-          "principal": "ryjl3-tyaaa-aaaaa-aaaba-cai"
+          "kind": "exact",
+          "principal": "ryjl3-tyaaa-aaaaa-aaaba-cai",
+          "method": "icrc1_supported_standards"
         },
         {
-          "kind": "principal",
-          "principal": "mxzaz-hqaaa-aaaar-qaada-cai"
+          "kind": "exact",
+          "principal": "ryjl3-tyaaa-aaaaa-aaaba-cai",
+          "method": "icrc1_symbol"
         },
         {
-          "kind": "principal",
-          "principal": "xevnm-gaaaa-aaaar-qafnq-cai"
+          "kind": "exact",
+          "principal": "ryjl3-tyaaa-aaaaa-aaaba-cai",
+          "method": "icrc1_decimals"
+        },
+        {
+          "kind": "exact",
+          "principal": "ryjl3-tyaaa-aaaaa-aaaba-cai",
+          "method": "icrc1_fee"
+        },
+        {
+          "kind": "exact",
+          "principal": "ryjl3-tyaaa-aaaaa-aaaba-cai",
+          "method": "icrc1_balance_of"
+        },
+        {
+          "kind": "exact",
+          "principal": "ryjl3-tyaaa-aaaaa-aaaba-cai",
+          "method": "icrc1_transfer"
+        },
+        {
+          "kind": "exact",
+          "principal": "mxzaz-hqaaa-aaaar-qaada-cai",
+          "method": "icrc1_supported_standards"
+        },
+        {
+          "kind": "exact",
+          "principal": "mxzaz-hqaaa-aaaar-qaada-cai",
+          "method": "icrc1_symbol"
+        },
+        {
+          "kind": "exact",
+          "principal": "mxzaz-hqaaa-aaaar-qaada-cai",
+          "method": "icrc1_decimals"
+        },
+        {
+          "kind": "exact",
+          "principal": "mxzaz-hqaaa-aaaar-qaada-cai",
+          "method": "icrc1_fee"
+        },
+        {
+          "kind": "exact",
+          "principal": "mxzaz-hqaaa-aaaar-qaada-cai",
+          "method": "icrc1_balance_of"
+        },
+        {
+          "kind": "exact",
+          "principal": "mxzaz-hqaaa-aaaar-qaada-cai",
+          "method": "icrc1_transfer"
+        },
+        {
+          "kind": "exact",
+          "principal": "xevnm-gaaaa-aaaar-qafnq-cai",
+          "method": "icrc1_supported_standards"
+        },
+        {
+          "kind": "exact",
+          "principal": "xevnm-gaaaa-aaaar-qafnq-cai",
+          "method": "icrc1_symbol"
+        },
+        {
+          "kind": "exact",
+          "principal": "xevnm-gaaaa-aaaar-qafnq-cai",
+          "method": "icrc1_decimals"
+        },
+        {
+          "kind": "exact",
+          "principal": "xevnm-gaaaa-aaaar-qafnq-cai",
+          "method": "icrc1_fee"
+        },
+        {
+          "kind": "exact",
+          "principal": "xevnm-gaaaa-aaaar-qafnq-cai",
+          "method": "icrc1_balance_of"
+        },
+        {
+          "kind": "exact",
+          "principal": "xevnm-gaaaa-aaaar-qafnq-cai",
+          "method": "icrc1_transfer"
+        },
+        {
+          "kind": "exact",
+          "principal": "ryjl3-tyaaa-aaaaa-aaaba-cai",
+          "method": "icrc2_approve"
+        },
+        {
+          "kind": "exact",
+          "principal": "mxzaz-hqaaa-aaaar-qaada-cai",
+          "method": "icrc2_approve"
+        },
+        {
+          "kind": "exact",
+          "principal": "xevnm-gaaaa-aaaar-qafnq-cai",
+          "method": "icrc2_approve"
+        },
+        {
+          "kind": "exact",
+          "principal": "4mmnk-kiaaa-aaaag-qbllq-cai",
+          "method": "getPool"
+        },
+        {
+          "kind": "method",
+          "method": "quote"
+        },
+        {
+          "kind": "method",
+          "method": "depositFromAndSwap"
+        },
+        {
+          "kind": "method",
+          "method": "withdraw"
+        },
+        {
+          "kind": "method",
+          "method": "getUserUnusedBalance"
         }
       ],
       "max_concurrency": 4,
@@ -50,8 +165,11 @@
         "getPendingApprovals",
         "syncBalance",
         "proposeTransfer",
+        "proposeSwap",
         "approveTicket",
         "rejectTicket",
+        "setDexConfig",
+        "recoverSettlementLock",
         "setPolicy",
         "setCircuitBreaker"
       ]
@@ -114,7 +232,7 @@
     },
     "recoverSettlementLock": {
       "type": "update",
-      "async": false
+      "async": "async*"
     },
     "setPolicy": {
       "type": "update",

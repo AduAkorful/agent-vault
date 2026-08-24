@@ -61,7 +61,7 @@ if (args[0] === "watch") {
 } else {
   try {
     await esbuild.build(config);
-  } catch {
+  } catch (error) {
     process.exit(1);
   }
 }

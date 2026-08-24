@@ -187,7 +187,9 @@ exposeTool(
     const limit = requirePositiveInt(args.limit, "limit", 1000);
     const offset = requireNonNegativeInt(args.offset, "offset");
     return unwrapResult(
-      await querySelf("getActivityHistory", [limit, offset]),
+      // Nat args must cross the kernel as decimal strings (icblast encoding),
+      // else AJV rejects the self-call before the backend runs.
+      await querySelf("getActivityHistory", [String(limit), String(offset)]),
     );
   },
 );

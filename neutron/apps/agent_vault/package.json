@@ -5,16 +5,16 @@
   "type": "module",
   "version": "1.0.0",
   "scripts": {
-    "build": "bun build.ts && npm run mogen",
+    "build": "node --experimental-strip-types build.ts && npm run mogen",
     "mogen": "bun ../../packages/neutron-scripts/src/mogen.ts",
-    "mopack": "bun ../../packages/neutron-scripts/src/mopack.ts",
+    "mopack": "node --experimental-strip-types package_mopack.ts",
     "schema": "bun ../../packages/neutron-scripts/src/method_schema.ts",
     "package:metadata": "bun ../../packages/neutron-scripts/src/package_metadata.ts",
     "validate": "bun ../../packages/neutron-scripts/src/validate.ts",
     "package": "npm run validate && npm run build && npm run mopack && npm run schema && npm run package:metadata && bun ../../packages/neutron-scripts/src/pack.ts",
     "watch": "bun build.ts watch",
-    "test:memory": "bun ../../packages/neutron-scripts/src/run_motoko_program.ts test/memory_release.test.mo",
-    "test": "npm run package && bun test && npm run test:memory"
+    "test:memory": "node --experimental-strip-types scripts/run_memory_test.ts",
+    "test": "npm run package && bun test test/package.test.ts && npm run test:memory"
   },
   "author": "",
   "license": "LicenseRef-Neutron-Sovereign-Application-License-1.0",
