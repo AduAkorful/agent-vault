@@ -20,7 +20,9 @@ neutron/test/*
 !neutron/test/e2e/
 neutron/test/e2e/*
 !neutron/test/e2e/agent-vault.spec.ts
+!neutron/test/e2e/agent-vault-live.spec.ts
 !neutron/local.ndeploy.json
+!neutron/agent-vault-live.ndeploy.json
 
 # Ignore app-level build artifacts inside agent_vault
 neutron/apps/agent_vault/dist/

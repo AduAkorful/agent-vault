@@ -1,0 +1,27 @@
+{
+  "format": 3,
+  "target": {
+    "kind": "pocketic",
+    "profile": "minimal",
+    "gateway_port": 8000,
+    "developer_identity_seed": 2,
+    "authorized_principals": [
+      "pbwxr-uqxlv-aiwi3-omw2n-ptdex-kyifb-kdsn6-zdiyd-ggzpu-nrzik-rqe",
+      "7vjoo-43khw-tvbam-tgtrj-lqr6g-fry6l-vmuor-tlbx6-3aj75-qukn5-yqe"
+    ],
+    "nodes": [
+      "agent-vault-live"
+    ]
+  },
+  "artifacts": {
+    "kind": "inline",
+    "kernel": {
+      "path": "apps/kernel/kernel.v0.3.12.neutron"
+    },
+    "packages": [
+      {
+        "path": "apps/agent_vault/agent_vault.v0.1.0.neutron"
+      }
+    ]
+  }
+}

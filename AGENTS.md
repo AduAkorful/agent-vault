@@ -10,7 +10,7 @@ This file is the single source of truth for project state and architectural boun
 - Participant: `AduAkorful`
 - Product rule: agents may autonomously settle policy-compliant transfers; every swap requires explicit owner approval.
 
-There is no standalone actor implementation, dfx configuration, root Mops package, or local token fixture suite. Those reference artifacts were removed on 2026-08-24 so the Neutron application is the only executable product.
+There is no standalone actor implementation, dfx configuration, or root Mops package. Those reference artifacts were removed on 2026-08-24 so the Neutron application is the only executable product. WS-K's local ledger harness is verification-only and uses real managed ICRC ledgers; it is not production mock data.
 
 ## Current milestone state
 
@@ -23,7 +23,7 @@ There is no standalone actor implementation, dfx configuration, root Mops packag
 | Real ICPSwap settlement | Complete | ICRC-2 approval, live pool discovery, swap, withdraw, sweep |
 | Permission narrowing | Complete | Exact ledger/factory reservations and minimum pool method scopes |
 | Demo/reference removal | Complete | Root standalone source, tests, dfx, and Mops files deleted |
-| Verification harness hardening | In progress | Package/Motoko/TypeScript green; live isolated-subaccount integration remains |
+| Verification harness hardening | Partial | Package/Motoko/TypeScript green; live isolated-subaccount approval integration is green; duplicate recovery and full live swap verification remain |
 
 ## Architecture decisions
 
@@ -116,8 +116,6 @@ Pools are always discovered from the factory and never hardcoded.
 
 ## Pending verification work
 
-- Add a live Neutron/PocketIC lane that funds the isolated vault subaccount and asserts its exact transfer delta.
-- Exercise a real parked ticket through owner approval.
 - Exercise duplicate/recovery behavior and prove no double debit.
 - Exercise the real swap lifecycle where the full ICPSwap graph is available.
 
@@ -139,3 +137,10 @@ Pools are always discovered from the factory and never hardcoded.
 - Bounded resolved approval-ticket retention while preserving every pending ticket;
   dashboard update calls now unwrap typed backend results before refreshing.
 - Current package is approximately 317 KiB and the package, Motoko, and TypeScript gates pass.
+
+### 2026-08-24 WS-K live isolated-custody verification
+
+- Added a PocketIC/Playwright verification lane that installs the canonical managed ckUSDC ledger at its production principal, reads the vault deposit account from `getVaultState`, queries the live ledger fee, funds that exact owner/subaccount, proposes a real escalation transfer, and approves it through the dashboard.
+- The live test passed against canister `m6toh-kp777-77775-qaabq-cai`: the recipient increased by exactly the transfer amount, the isolated vault subaccount decreased by amount plus the queried fee, and the shared default account remained unchanged.
+- Extended the local fixture client with account-aware balance/funding and live fee queries; these helpers use the real PocketIC ledger and do not inject balances, receipts, or production mutation hooks.
+- Replaced Bun-only `import.meta.dir` path resolution in the provisioner modules with `fileURLToPath(import.meta.url)`, so the same source works under Bun and Playwright's Node runner. Provisioner TypeScript and all 271 provisioner tests pass.
