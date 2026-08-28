@@ -30,31 +30,26 @@ export function PolicyPanel({ state, busy, onUpdate, draft, onChangeDraft }: { s
     if (!isPolicyNameValid(profileName)) { setDraftError("Profile name must be 1–64 characters."); return; }
     const errors = validatePolicyDraft(draft, state.balances);
     if (errors.length) { setDraftError(errors.join(" ")); return; }
-    const name = window.prompt("Name this policy profile", "New Policy Profile")?.trim();
-    if (!name) return;
-      try { await onUpdate("createPolicyProfile", [[name, policyArg(policy, draft, state.balances)]], "policy"); }
+    const name = profileName.trim() === activeProfile?.name ? `${profileName.trim()} Copy` : profileName.trim();
+    try { await onUpdate("createPolicyProfile", [[name, policyArg(policy, draft, state.balances)]], "policy"); }
     catch (error) { setDraftError(errorMessage(error)); }
   };
   const selectProfile = async (id: string) => {
     if (id === String(state.activePolicyId)) return;
-    if (!window.confirm("Switching profiles changes the active guardrails immediately. Continue?")) return;
     try { await onUpdate("setActivePolicyProfile", [id], "policy"); }
     catch (error) { setDraftError(errorMessage(error)); }
   };
-  const deleteProfile = async () => {
-    if (!activeProfile || !window.confirm(`Delete policy profile “${activeProfile.name}”?`)) return;
-    try { await onUpdate("deletePolicyProfile", [String(activeProfile.id)], "policy"); }
+  const deleteProfile = async (targetId?: string) => {
+    const inactive = state.policies.find((p) => p.id !== state.activePolicyId);
+    const idToDelete = targetId ?? (activeProfile?.id !== state.activePolicyId ? activeProfile?.id : inactive?.id);
+    if (!idToDelete) { setDraftError("Cannot delete the only remaining policy profile."); return; }
+    try { await onUpdate("deletePolicyProfile", [String(idToDelete)], "policy"); }
     catch (error) { setDraftError(errorMessage(error)); }
   };
   const updateLimit = (index: number, field: keyof PolicyDraft["limits"][number], value: string) => onChangeDraft((current) => ({ ...current, limits: current.limits.map((entry, i) => i === index ? { ...entry, [field]: value } : entry) }));
   const addLimit = () => onChangeDraft((current) => ({ ...current, limits: [...current.limits, { token: "", maxPerTx: "", maxHourlySpend: "", maxDailySpend: "" }] }));
   const removeLimit = (index: number) => onChangeDraft((current) => ({ ...current, limits: current.limits.filter((_, i) => i !== index) }));
   const toggleCircuitBreaker = () => {
-    if (!window.confirm(
-      policy.circuitBreaker
-        ? "Reset the circuit breaker? Operations will resume under configured guardrails."
-        : "Activate the circuit breaker? All transfers and swaps will be halted until reset."
-    )) return;
     void onUpdate("setCircuitBreaker", [!policy.circuitBreaker], "circuit-breaker");
   };
 

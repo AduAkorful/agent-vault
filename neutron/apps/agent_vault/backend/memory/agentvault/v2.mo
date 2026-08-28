@@ -129,6 +129,7 @@ module {
         // A swap was proposed: swaps always park for owner approval and never
         // settle autonomously (see Policy.classify / main.mo settleSwap).
         #SwapRequiresApproval;
+        #TooManyPendingTickets;
     };
 
     public type PolicyEvaluation = {

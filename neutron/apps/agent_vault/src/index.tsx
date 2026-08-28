@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { loadTileContext, querySelf, updateSelf, type JsonValue } from "neutron-tools/app";
 import type { Ticket, TileContext, VaultState, PolicyDraft, AuditEntry } from "./types";
-import { errorMessage, exportAuditToCsv, shortenPrincipal, unwrapOk, makePolicyDraft, isPolicyDraftDirty } from "./utils";
+import { errorMessage, exportAuditToCsv, shortenPrincipal, unwrapOk, makePolicyDraft, isPolicyDraftDirty, downloadFile } from "./utils";
 import { IconActivity, IconAlertOctagon, IconDownload, IconInbox, IconRefresh, IconSliders, IconVault } from "./components/Icons";
 import { CommandCenter } from "./components/CommandCenter";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -84,15 +84,27 @@ function Dashboard() {
     return () => clearInterval(interval);
   }, [refreshState, busy]);
 
+  const safeUnwrap = <T,>(result: unknown): T => {
+    if (result === null || result === undefined) return null as T;
+    if (typeof result === "object" && result !== null && !Array.isArray(result)) {
+      const rec = result as Record<string, unknown>;
+      if ("err" in rec) throw new Error(extractErrorMessage(rec.err));
+      if ("Err" in rec) throw new Error(extractErrorMessage(rec.Err));
+      if ("ok" in rec) return rec.ok as T;
+      if ("Ok" in rec) return rec.Ok as T;
+    }
+    return result as T;
+  };
+
   const handleUpdate = async (method: string, args: JsonValue[], key: string) => {
     setBusy(key); setBanner(null);
-    try { unwrapOk(await updateSelf(method, args)); await refreshState(); setBanner({ kind: "success", text: "Policy saved on-chain." }); }
+    try { safeUnwrap(await updateSelf(method, args)); await refreshState(); setBanner({ kind: "success", text: "Policy saved on-chain." }); }
     catch (error) { setBanner({ kind: "error", text: errorMessage(error) }); }
     finally { setBusy(null); }
   };
   const handleSyncToken = async (token: string) => {
     setBusy(`sync-${token}`); setBanner(null);
-    try { unwrapOk(await updateSelf("syncBalance", [token])); await refreshState(); setBanner({ kind: "success", text: `Updated ${shortenPrincipal(token)} from its live ledger.` }); }
+    try { safeUnwrap(await updateSelf("syncBalance", [token])); await refreshState(); setBanner({ kind: "success", text: `Updated ${shortenPrincipal(token)} from its live ledger.` }); }
     catch (error) { setBanner({ kind: "error", text: `Token sync failed: ${errorMessage(error)}` }); }
     finally { setBusy(null); }
   };
@@ -115,15 +127,14 @@ function Dashboard() {
     finally { setBusy(null); }
   };
   const handleApproveTicket = async (ticket: Ticket) => {
-    if (!window.confirm(`Approve ticket #${ticket.id}? This will execute the on-chain settlement immediately.`)) return;
     setBusy(`ticket-${ticket.id}`); setBanner(null);
-    try { unwrapOk(await updateSelf("approveTicket", [String(ticket.id)])); await refreshState(); setBanner({ kind: "success", text: `Ticket #${ticket.id} approved and settled.` }); }
+    try { safeUnwrap(await updateSelf("approveTicket", [String(ticket.id)])); await refreshState(); setBanner({ kind: "success", text: `Ticket #${ticket.id} approved and settled.` }); }
     catch (error) { setBanner({ kind: "error", text: `Ticket #${ticket.id} was not settled: ${errorMessage(error)}` }); }
     finally { setBusy(null); }
   };
   const handleRejectTicket = async (ticket: Ticket, reason: string = "Owner rejected") => {
     setBusy(`ticket-${ticket.id}`); setBanner(null);
-    try { unwrapOk(await updateSelf("rejectTicket", [[String(ticket.id), reason]])); await refreshState(); setBanner({ kind: "info", text: `Ticket #${ticket.id} rejected.` }); }
+    try { safeUnwrap(await updateSelf("rejectTicket", [[String(ticket.id), reason]])); await refreshState(); setBanner({ kind: "info", text: `Ticket #${ticket.id} rejected.` }); }
     catch (error) { setBanner({ kind: "error", text: `Ticket #${ticket.id} could not be rejected: ${errorMessage(error)}` }); }
     finally { setBusy(null); }
   };
@@ -188,7 +199,7 @@ function Dashboard() {
     setBusy("load-more"); setBanner(null);
     try {
       const raw = await querySelf("getActivityHistory", [[String(100), String(auditOffset)]]);
-      const page = unwrapOk<AuditEntry[]>(raw);
+      const page = (raw as unknown as AuditEntry[]) ?? [];
       setExtraAudit((prev) => [...page, ...prev]);
       setAuditOffset((prev) => prev + 100);
       setHasMoreActivity(page.length === 100);
@@ -206,19 +217,14 @@ function Dashboard() {
       let offset = 0;
       while (true) {
         const raw = await querySelf("getActivityHistory", [[String(100), String(offset)]]);
-        const page = unwrapOk<AuditEntry[]>(raw);
+        const page = safeUnwrap<AuditEntry[]>(raw) ?? [];
         all = all.concat(page);
         if (page.length < 100) break;
         offset += 100;
       }
       const csv = exportAuditToCsv(all, state?.balances ?? []);
-      const blob = new Blob([csv], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `agent-vault-audit-${Date.now()}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadFile(`agent-vault-audit-${Date.now()}.csv`, csv, "text/csv");
+      setBanner({ kind: "success", text: "Audit log exported to CSV." });
     } catch (error) {
       setBanner({ kind: "error", text: `Export failed: ${errorMessage(error)}` });
     } finally {

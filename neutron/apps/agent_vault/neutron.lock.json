@@ -9,12 +9,12 @@
           "entry": "a48ed7297bd53e070f1cf06017ac0e70544403cb218b6d0c7519cee4b5e7689a"
         },
         "2": {
-          "hash": "1a6655deb969bf5e8fe2ff565e08856d6cf03a6fab7d1b1074faf4cb2e5e14f2",
-          "entry": "895713990a659def774bc83ef879e01579ebb62a88a559ca647e91f92028e06a"
+          "hash": "34485a666600fc5db7bede1f41c9da54b838cb72d729eb3fa347b0a8ac310e07",
+          "entry": "9576125d24dd3b0b7d37bdd7dfae5b79864bf678d16601a825a2f4afde6ff1a6"
         }
       },
       "migrations": {
-        "1->2": "dac980906cc6c7615c11357c9bd871d92d2228c46edc0dd00088a1b98f972cb6"
+        "1->2": "4ef15f3a5d02ffb5d5a1d59a4c4c34d10ca1e343639b94e2bb2574b2b8350bb0"
       }
     }
   }

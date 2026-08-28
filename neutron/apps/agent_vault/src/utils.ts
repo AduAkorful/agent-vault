@@ -130,6 +130,21 @@ export function isSettlementSuccess(settlement: JsonValue): boolean {
   return false;
 }
 
+export const KNOWN_TOKEN_DECIMALS: Record<string, number> = {
+  "ryjl3-tyaaa-aaaaa-aaaba-cai": 8, // ICP
+  "mxzaz-hqaaa-aaaar-qaada-cai": 8, // ckBTC
+  "xevnm-gaaaa-aaaar-qafnq-cai": 6, // ckUSDC
+};
+
+export function getTokenDecimals(tokenPrincipal: string, balances: Balance[] = []): number | null {
+  if (!tokenPrincipal) return null;
+  const norm = tokenPrincipal.toLowerCase().trim();
+  const found = balances.find((b) => toPrincipalText(b.token.id).toLowerCase() === norm);
+  if (found) return found.token.decimals;
+  if (norm in KNOWN_TOKEN_DECIMALS) return KNOWN_TOKEN_DECIMALS[norm]!;
+  return null;
+}
+
 export interface ActionDetails {
   type: "transfer" | "swap" | "unknown";
   summary: string;
@@ -280,7 +295,6 @@ export function getErrorGuidance(error: JsonValue): string | null {
 }
 
 export function parseActionDetails(action: JsonValue, balances: Balance[] = []): ActionDetails {
-  const tokenDecimals = new Map(balances.map((b) => [toPrincipalText(b.token.id), b.token.decimals]));
   const tokenSymbols = new Map(balances.map((b) => [toPrincipalText(b.token.id), b.token.symbol]));
 
   if (typeof action === "object" && action !== null) {
@@ -291,7 +305,7 @@ export function parseActionDetails(action: JsonValue, balances: Balance[] = []):
       const recipient = toPrincipalText(t.recipient ?? t.to ?? "");
       const rawAmount = String(t.amount ?? "");
       const reason = t.reason ? String(t.reason) : undefined;
-      const decimals = tokenDecimals.get(token) ?? null;
+      const decimals = getTokenDecimals(token, balances);
       const amount = formatAmount(rawAmount, decimals);
       const tokenLabel = tokenSymbols.get(token) || getPrincipalLabel(token) || shortenPrincipal(token);
       const recipientLabel = getPrincipalLabel(recipient) || shortenPrincipal(recipient);
@@ -317,8 +331,8 @@ export function parseActionDetails(action: JsonValue, balances: Balance[] = []):
       const slippageBps = String(s.slippageBps ?? "");
       const reason = s.reason ? String(s.reason) : undefined;
 
-      const fromDecimals = tokenDecimals.get(fromToken) ?? null;
-      const toDecimals = tokenDecimals.get(toToken) ?? null;
+      const fromDecimals = getTokenDecimals(fromToken, balances);
+      const toDecimals = getTokenDecimals(toToken, balances);
       const amount = formatAmount(rawAmount, fromDecimals);
       const minReturn = formatAmount(rawMinReturn, toDecimals);
 
@@ -414,10 +428,9 @@ export function parseFriendlyAmount(value: string, decimals: number | null): big
 }
 
 export function makePolicyDraft(policy: Policy, balances: Balance[] = []): PolicyDraft {
-  const tokenDecimals = new Map(balances.map((b) => [toPrincipalText(b.token.id), b.token.decimals]));
   return {
     limits: policy.limits.map((l) => {
-      const decimals = tokenDecimals.get(toPrincipalText(l.token)) ?? null;
+      const decimals = getTokenDecimals(toPrincipalText(l.token), balances);
       return {
         token: toPrincipalText(l.token),
         maxPerTx: formatAmount(l.limits.maxPerTx, decimals),
@@ -470,11 +483,10 @@ export function isValidPrincipal(p: string): boolean {
 }
 
 export function policyArg(policy: Policy, draft: PolicyDraft, balances: Balance[] = []): JsonValue {
-  const tokenDecimals = new Map(balances.map((b) => [b.token.id, b.token.decimals]));
   const limits = draft.limits
     .filter((l) => l.token.trim().length > 0)
     .map((l) => {
-      const decimals = tokenDecimals.get(l.token.trim()) ?? null;
+      const decimals = getTokenDecimals(l.token.trim(), balances);
       return {
         token: l.token.trim(),
         limits: {
@@ -500,7 +512,6 @@ export function policyArg(policy: Policy, draft: PolicyDraft, balances: Balance[
 export function validatePolicyDraft(draft: PolicyDraft, balances: Balance[] = []): string[] {
   const errors: string[] = [];
   const tokens = new Set<string>();
-  const tokenDecimals = new Map(balances.map((b) => [b.token.id, b.token.decimals]));
 
   draft.limits.forEach((limit, index) => {
     const label = `Token budget ${index + 1}`;
@@ -509,7 +520,7 @@ export function validatePolicyDraft(draft: PolicyDraft, balances: Balance[] = []
     if (tokens.has(token)) errors.push(`${label} duplicates another token budget.`);
     tokens.add(token);
 
-    const decimals = tokenDecimals.get(token) ?? null;
+    const decimals = getTokenDecimals(token, balances);
     const values = [limit.maxPerTx.trim(), limit.maxHourlySpend.trim(), limit.maxDailySpend.trim()];
     
     const decimalRegex = /^[0-9]+(\.[0-9]+)?$/;
@@ -612,7 +623,7 @@ export function exportAuditToCsv(audit: AuditEntry[], balances: Balance[] = []):
   const headers = ["ID", "Timestamp", "Action Type", "Tier", "Policy Error", "Ticket ID", "Note", "Settlement Status", "Block Index/AmountOut"];
   const rows = audit.map((entry) => {
     const details = parseActionDetails(entry.action, balances);
-    const receipt = parseReceipt(entry.settlement);
+    const receipt = parseReceipt(entry.settlement, balances);
     const tierName = getTier(entry.tier) === "autonomous" ? "Autonomous" : getTier(entry.tier) === "escalation" ? "Escalation" : "Forbidden";
     const settlementStatus = entry.settlement === null ? "unsettled" : receipt ? `settled (${receipt.type === "transfer" ? receipt.blockIndex : receipt.amountOut})` : "settled";
     return [
@@ -629,4 +640,27 @@ export function exportAuditToCsv(audit: AuditEntry[], balances: Balance[] = []):
   });
   const allRows = [headers, ...rows];
   return allRows.map((row) => row.map(csvEscape).join(",")).join("\n");
+}
+
+export function downloadFile(filename: string, content: string, mimeType: string = "text/plain") {
+  const dataUrl = `data:${mimeType};charset=utf-8,${encodeURIComponent(content)}`;
+
+  try {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      if (document.body.contains(a)) document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 1000);
+  } catch {}
+
+  try {
+    window.open(dataUrl, "_blank");
+  } catch {}
 }

@@ -3,6 +3,8 @@ import type { VaultState } from "../types";
 import { generateAgentSkill } from "../utils/generateSkill";
 import { IconDownload, IconLayers, IconShield } from "./Icons";
 
+import { downloadFile } from "../utils";
+
 export function SkillExport({ state }: { state: VaultState }) {
   const [status, setStatus] = useState<"idle" | "generating" | "success" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -12,16 +14,7 @@ export function SkillExport({ state }: { state: VaultState }) {
     setErrorMessage(null);
     try {
       const skill = generateAgentSkill(state);
-      const blob = new Blob([skill.content], { type: "text/markdown" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = skill.filename;
-      a.style.display = "none";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      downloadFile(skill.filename, skill.content, "text/markdown");
       setStatus("success");
       setTimeout(() => setStatus("idle"), 3000);
     } catch (error) {

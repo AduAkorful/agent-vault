@@ -21,6 +21,7 @@ import Nat "mo:core/Nat";
 import Nat64 "mo:core/Nat64";
 import Blob "mo:core/Blob";
 import Principal "mo:core/Principal";
+import Text "mo:core/Text";
 import Time "mo:core/Time";
 import NeutronCapabilities "mo:neutron-capabilities";
 import V "./memory/agentvault/v2";
@@ -941,7 +942,7 @@ module {
         public func /*update*/syncAllBalances() : async* [BalanceResult] {
             var results : [BalanceResult] = [];
             for (balance in mem.liveBalances.vals()) {
-                results := Array.append(results, [await* sync(balance.token.id)]);
+                results := Array.concat(results, [await* sync(balance.token.id)]);
             };
             results;
         };
@@ -960,7 +961,7 @@ module {
             if (Text.size(reason) > 2_000) return #err(#InvalidPolicy);
             switch (assertNotSettling()) {
                 case (?error) return #err(error);
-                case null;
+                case null {};
             };
             let profile = switch (activeProfile()) {
             case null { return #err(#PolicyProfileNotFound) };
@@ -1097,7 +1098,7 @@ module {
 
         // ----- admin (update; owner-only — excluded from agent_entrypoints) -----
         public func /*update*/setDexConfig(next : DexConfig) : UnitResult {
-            switch (assertNotSettling()) { case (?error) return #err(error); case null; };
+            switch (assertNotSettling()) { case (?error) return #err(error); case null {}; };
             if (next.feeTier == 0 or next.feeTier > 10000) return #err(#InvalidAmount);
             if (next.factory != Principal.fromText("4mmnk-kiaaa-aaaag-qbllq-cai")) return #err(#DexNotAllowed);
             mem.dexConfig := next;
@@ -1467,7 +1468,7 @@ module {
         };
 
         public func /*update*/updatePolicyProfile(id : Nat, name : Text, next : Policy) : UnitResult {
-            switch (assertNotSettling()) { case (?error) return #err(error); case null; };
+            switch (assertNotSettling()) { case (?error) return #err(error); case null {}; };
             if (name == "" or name.size() > 64) return #err(#InvalidPolicyName);
             if (not P.validPolicy(next)) return #err(#InvalidPolicy);
             for (profile in mem.policies.vals()) { if (profile.id != id and profile.name == name) return #err(#InvalidPolicyName) };
@@ -1489,7 +1490,7 @@ module {
         };
 
         public func /*update*/setActivePolicyProfile(id : Nat) : UnitResult {
-            switch (assertNotSettling()) { case (?error) return #err(error); case null; };
+            switch (assertNotSettling()) { case (?error) return #err(error); case null {}; };
             for (profile in mem.policies.vals()) {
                 if (profile.id == id) {
                     mem.activePolicyId := id;
@@ -1510,7 +1511,7 @@ module {
         };
 
         public func /*update*/setPolicy(next : Policy) : UnitResult {
-            switch (assertNotSettling()) { case (?error) return #err(error); case null; };
+            switch (assertNotSettling()) { case (?error) return #err(error); case null {}; };
             if (not P.validPolicy(next)) return #err(#InvalidPolicy);
             switch (activeProfile()) {
                 case null #err(#PolicyProfileNotFound);
@@ -1526,7 +1527,7 @@ module {
         };
 
         public func /*update*/setCircuitBreaker(active : Bool) : UnitResult {
-            switch (assertNotSettling()) { case (?error) return #err(error); case null; };
+            switch (assertNotSettling()) { case (?error) return #err(error); case null {}; };
             switch (activeProfile()) {
                 case null #err(#PolicyProfileNotFound);
                 case (?profile) {
