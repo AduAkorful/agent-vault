@@ -23,7 +23,7 @@ import Blob "mo:core/Blob";
 import Principal "mo:core/Principal";
 import Time "mo:core/Time";
 import NeutronCapabilities "mo:neutron-capabilities";
-import V "./memory/agentvault/v1";
+import V "./memory/agentvault/v2";
 import P "./vault/Policy";
 import Icrc "./icrc1/Client";
 import IcrcTypes "./icrc1/Types";
@@ -68,6 +68,7 @@ module {
         #swap : { dex : Principal; pool : Principal; transactionId : ?Nat; approvalBlockIndex : Nat; amountOut : Nat; fee : Nat };
     };
     public type Settlement = { #success : Receipt; #failure : ExternalError };
+    public type PolicyProfile = { id : Nat; name : Text; revision : Nat; policy : Policy };
     public type VaultError = {
         #CircuitBreakerActive;
         #InvalidAmount;
@@ -89,7 +90,25 @@ module {
         #QuoteExpired;
         #TokenLimitNotConfigured;
         #InvalidPolicy;
+        #InvalidPolicyName;
+        #PolicyProfileNotFound;
+        #PolicyProfileNotActive;
+        #PolicyRevisionChanged;
+        #ActivePolicyDeletion;
         #SwapRequiresApproval;
+        #TooManyPendingTickets;
+    };
+    public type PolicyEvaluation = {
+        profileId : Nat;
+        profileName : Text;
+        revision : Nat;
+        fee : ?Nat;
+        hourlyBefore : ?Nat;
+        dailyBefore : ?Nat;
+        hourlyAfter : ?Nat;
+        dailyAfter : ?Nat;
+        tier : Tier;
+        policyError : ?VaultError;
     };
     public type TicketStatus = { #pending; #approved : Receipt; #rejected : Text };
     public type Ticket = {
@@ -97,6 +116,7 @@ module {
         action : Action;
         createdAt : Int;
         policyError : ?VaultError;
+        evaluation : ?PolicyEvaluation;
         status : TicketStatus;
     };
     public type AuditEntry = {
@@ -104,13 +124,15 @@ module {
         action : Action;
         tier : Tier;
         policyError : ?VaultError;
+        evaluation : ?PolicyEvaluation;
         settlement : ?Settlement;
         timestamp : Int;
         ticketId : ?Nat;
         note : Text;
     };
     public type DepositAccount = { owner : Principal; subaccount : [Nat8] };
-    public type SettlementLock = { action : Action; startedAt : Int };
+    public type PolicyProfileRef = { id : Nat; name : Text; revision : Nat };
+    public type SettlementLock = { action : Action; startedAt : Int; profile : ?PolicyProfileRef; stage : ?Text };
     public type DexConfig = { factory : Principal; feeTier : Nat };
 
     // ----- return-only projections -----
@@ -130,6 +152,8 @@ module {
     public type TokenSpend = { token : Principal; hourly : Nat; daily : Nat };
     public type VaultState = {
         balances : [Balance];
+        policies : [PolicyProfile];
+        activePolicyId : Nat;
         policy : Policy;
         spend : [TokenSpend];
         pending : [Ticket];
@@ -147,6 +171,27 @@ module {
     public type PendingResult = { #ok : [Ticket]; #err : VaultError };
     public type BalanceResult = { #ok : Balance; #err : VaultError };
     public type OutcomeResult = { #ok : Outcome; #err : VaultError };
+
+    // Read-only classification preview returned by evaluateTransfer. Lets an agent
+    // check whether a proposed transfer would settle autonomously or escalate,
+    // including the live fee, current balance, and per-token spend utilisation —
+    // all without moving any funds.
+    public type EvaluationSpend = {
+        perTx : Nat;
+        hourly : Nat;
+        daily : Nat;
+        maxPerTx : Nat;
+        maxHourly : Nat;
+        maxDaily : Nat;
+    };
+    public type Evaluation = {
+        tier : Tier;
+        policyError : ?VaultError;
+        fee : Nat;
+        balance : Nat;
+        spend : EvaluationSpend;
+    };
+    public type EvaluationResult = { #ok : Evaluation; #err : VaultError };
     public type IdResult = { #ok : Nat; #err : VaultError };
     public type UnitResult = { #ok : (); #err : VaultError };
 
@@ -183,6 +228,10 @@ module {
             switch (action) { case (#transfer(p)) p.token; case (#swap(p)) p.fromToken };
         };
 
+        func reasonOf(action : Action) : Text {
+            switch (action) { case (#transfer(p)) p.reason; case (#swap(p)) p.reason };
+        };
+
         // Read the fee used for policy classification immediately before the
         // settlement path. Limits are fee-inclusive, so a stale cached fee is
         // unsafe: a ledger fee change must be reflected before an action can be
@@ -208,6 +257,18 @@ module {
         // recorded spend reflects the true debit (amount + fee).
         func receiptFee(receipt : Receipt) : Nat {
             switch (receipt) { case (#transfer(t)) t.fee; case (#swap(t)) t.fee };
+        };
+
+        func stageName(stage : V.SettlementStage) : Text {
+            switch (stage) {
+                case (#transfer) "transfer";
+                case (#swapTransit) "swapTransit";
+                case (#approval) "approval";
+                case (#approvalRevoke) "approvalRevoke";
+                case (#poolSwap) "poolSwap";
+                case (#withdraw) "withdraw";
+                case (#sweep) "sweep";
+            };
         };
 
         func defaultAccount() : IcrcTypes.Account {
@@ -240,12 +301,90 @@ module {
         let activityRetention : Nat = 1_000;
         let dashboardActivityWindow : Nat = 100;
         let resolvedTicketRetention : Nat = 1_000;
+        let pendingTicketLimit : Nat = 1_000;
+
+        // Returns #SettlementInFlight if a settlement is currently in progress,
+        // so policy mutators cannot alter the active policy mid-settlement.
+        func assertNotSettling() : ?VaultError {
+            if (mem.settlementInFlight) ?#SettlementInFlight else null
+        };
+
+        // Prune spend entries older than 24 hours. spendIn only consults
+        // the hourly/daily windows, so entries beyond 24h are safe to discard
+        // — keeping the array bounded over the vault's lifetime.
+        let spendRetentionWindow : Int = 86_400_000_000_000;
+        func pruneSpend(now : Int) {
+            let cutoff = now - spendRetentionWindow;
+            mem.spend := Array.filter<V.Spend>(mem.spend, func(entry) { entry.timestamp > cutoff });
+        };
 
         func recentActivity(limit : Nat) : [AuditEntry] {
             let size = mem.activity.size();
             let count = Nat.min(limit, size);
             if (count == 0) return [];
             Array.tabulate<AuditEntry>(count, func(i) { mem.activity[size - count + i] });
+        };
+
+        func activeProfile() : ?PolicyProfile {
+            for (profile in mem.policies.vals()) {
+                if (profile.id == mem.activePolicyId) return ?profile;
+            };
+            null
+        };
+
+        func evaluationFor(profile : PolicyProfile, tier : Tier, policyError : ?VaultError, fee : ?Nat, hourlyBefore : ?Nat, dailyBefore : ?Nat, hourlyAfter : ?Nat, dailyAfter : ?Nat) : PolicyEvaluation {
+            {
+                profileId = profile.id;
+                profileName = profile.name;
+                revision = profile.revision;
+                fee;
+                hourlyBefore;
+                dailyBefore;
+                hourlyAfter;
+                dailyAfter;
+                tier;
+                policyError;
+            }
+        };
+
+        func syncActivePolicy(next : Policy) : Bool {
+            switch (activeProfile()) {
+                case null false;
+                case (?profile) syncActivePolicyIfCurrent(profile.id, profile.revision, next);
+            }
+        };
+
+        func syncActivePolicyIfCurrent(profileId : Nat, revision : Nat, next : Policy) : Bool {
+            switch (activeProfile()) {
+                case null false;
+                case (?profile) {
+                    if (profile.id != profileId or profile.revision != revision) return false;
+                    mem.policy := next;
+                    mem.policies := Array.map<PolicyProfile, PolicyProfile>(mem.policies, func(candidate) {
+                        if (candidate.id == profile.id) {
+                            { id = candidate.id; name = candidate.name; revision = candidate.revision; policy = next };
+                        } else candidate;
+                    });
+                    true;
+                };
+            }
+        };
+
+        func addAuditWithEvaluation(
+            action : Action,
+            tier : Tier,
+            policyError : ?VaultError,
+            evaluation : ?PolicyEvaluation,
+            settlement : ?Settlement,
+            ticketId : ?Nat,
+            note : Text,
+        ) : Nat {
+            let id = mem.nextId;
+            mem.nextId += 1;
+            let updated = Array.concat(mem.activity, [{ id; action; tier; policyError; evaluation; settlement; timestamp = Time.now(); ticketId; note }]);
+            let size = updated.size();
+            mem.activity := if (size <= activityRetention) updated else Array.tabulate<AuditEntry>(activityRetention, func(i) { updated[size - activityRetention + i] });
+            id;
         };
 
         func addAudit(
@@ -256,12 +395,11 @@ module {
             ticketId : ?Nat,
             note : Text,
         ) : Nat {
-            let id = mem.nextId;
-            mem.nextId += 1;
-            let updated = Array.concat(mem.activity, [{ id; action; tier; policyError; settlement; timestamp = Time.now(); ticketId; note }]);
-            let size = updated.size();
-            mem.activity := if (size <= activityRetention) updated else Array.tabulate<AuditEntry>(activityRetention, func(i) { updated[size - activityRetention + i] });
-            id;
+            let evaluation = switch (activeProfile()) {
+                case null null;
+                case (?profile) ?evaluationFor(profile, tier, policyError, null, null, null, null, null);
+            };
+            addAuditWithEvaluation(action, tier, policyError, evaluation, settlement, ticketId, note)
         };
 
         func pending() : [Ticket] {
@@ -290,6 +428,7 @@ module {
                                 action = ticket.action;
                                 createdAt = ticket.createdAt;
                                 policyError = ticket.policyError;
+                                evaluation = ticket.evaluation;
                                 status = #approved(receipt);
                             };
                         } else ticket;
@@ -372,16 +511,26 @@ module {
                 case (?lock) (lock.startedAt, lock.ticketId);
                 case null (Time.now(), null);
             };
-            mem.settlementLock := ?{ action; startedAt; ticketId; intent = ?intent };
+            let profile = switch (activeProfile()) {
+                case null null;
+                case (?value) ?{ id = value.id; name = value.name; revision = value.revision };
+            };
+            mem.settlementLock := ?{ action; startedAt; ticketId; profile; intent = ?intent };
             intent;
         };
 
         func replaceIntent(action : Action, intent : V.SettlementIntent) {
-            let (startedAt, ticketId) = switch (mem.settlementLock) {
-                case (?lock) (lock.startedAt, lock.ticketId);
-                case null (Time.now(), null);
+            let (startedAt, ticketId, profile) = switch (mem.settlementLock) {
+                case (?lock) (lock.startedAt, lock.ticketId, lock.profile);
+                case null {
+                    let profile = switch (activeProfile()) {
+                        case null null;
+                        case (?value) ?{ id = value.id; name = value.name; revision = value.revision };
+                    };
+                    (Time.now(), null, profile)
+                };
             };
-            mem.settlementLock := ?{ action; startedAt; ticketId; intent = ?intent };
+            mem.settlementLock := ?{ action; startedAt; ticketId; profile; intent = ?intent };
         };
 
         // ----- settlement (real ICRC-1 over the backend_calls capability) -----
@@ -443,6 +592,7 @@ module {
         // shared canister. Every ICRC leg has its own durable key. The pool call
         // itself is never retried: recovery inspects the pool balance instead.
         func settleSwap(p : SwapProposal) : async* Settlement {
+            if (p.fromToken == p.toToken) return external("SELF_SWAP", "cannot swap a token to itself", false);
             if (p.slippageBps > 10_000) return external("INVALID_SLIPPAGE", "slippageBps must be at most 10000", false);
             if (Time.now() > p.quoteExpiresAt) return external("QUOTE_EXPIRED", "quote deadline passed before settlement", false);
             if (not P.contains(mem.policy.allowlists.dexes, p.dex)) return external("DEX_NOT_ALLOWED", "DEX is not in the policy allowlist", false);
@@ -662,6 +812,19 @@ module {
         // awaits the ledger, a second proposal that arrives mid-settlement finds
         // settlementInFlight already set and is turned away with SettlementInFlight.
         func proposeAction(action : Action) : async* Outcome {
+            let profile = switch (activeProfile()) {
+                case null {
+                    let error : VaultError = #PolicyProfileNotFound;
+                    let id = addAudit(action, #Forbidden, ?error, null, null, "active policy profile is unavailable");
+                    return { tier = #Forbidden; error = ?error; ticketId = null; auditId = id; settlement = null };
+                };
+                case (?value) value;
+            };
+            if (Text.size(reasonOf(action)) > 2_000) {
+                let error : VaultError = #InvalidPolicy;
+                let id = addAudit(action, #Forbidden, ?error, null, null, "reason exceeds 2000 character limit");
+                return { tier = #Forbidden; error = ?error; ticketId = null; auditId = id; settlement = null };
+            };
             let token = spendToken(action);
             let fee = switch (await* classificationFee(action)) {
                 case (#ok(value)) value;
@@ -670,44 +833,54 @@ module {
                     return { tier = #Forbidden; error = ?error; ticketId = null; auditId = id; settlement = null };
                 };
             };
-            let hourly = P.spendIn(mem.spend, token, Time.now(), 3_600_000_000_000);
-            let daily = P.spendIn(mem.spend, token, Time.now(), 86_400_000_000_000);
-            let (tier, policyError) = P.classify(action, mem.policy, fee, hourly, daily);
+            let now = Time.now();
+            let hourly = P.spendIn(mem.spend, token, now, 3_600_000_000_000);
+            let daily = P.spendIn(mem.spend, token, now, 86_400_000_000_000);
+            let debit = amountOf(action) + fee;
+            let (tier, policyError) = P.classify(action, profile.policy, fee, hourly, daily);
+            let evaluation : PolicyEvaluation = evaluationFor(profile, tier, policyError, ?fee, ?hourly, ?daily, ?(hourly + debit), ?(daily + debit));
             if (tier == #Forbidden) {
-                let id = addAudit(action, tier, policyError, null, null, "policy rejected");
+                let id = addAuditWithEvaluation(action, tier, policyError, ?evaluation, null, null, "policy rejected");
                 return { tier; error = policyError; ticketId = null; auditId = id; settlement = null };
             };
             if (tier == #Escalation) {
+                let pendingCount = Array.foldLeft<Ticket, Nat>(mem.settlementTickets, 0, func(acc, t) { if (t.status == #pending) acc + 1 else acc });
+                if (pendingCount >= pendingTicketLimit) {
+                    let id = addAuditWithEvaluation(action, tier, ?#TooManyPendingTickets, ?evaluation, null, null, "pending ticket cap reached; owner should resolve existing approvals");
+                    return { tier; error = ?#TooManyPendingTickets; ticketId = null; auditId = id; settlement = null };
+                };
                 let ticketId = mem.nextId;
                 mem.nextId += 1;
-                mem.settlementTickets := retainTickets(Array.concat(mem.settlementTickets, [{ id = ticketId; action; createdAt = Time.now(); policyError; status = #pending }]));
-                let id = addAudit(action, tier, policyError, null, ?ticketId, "pending approval");
+                let ticket : Ticket = { id = ticketId; action; createdAt = now; policyError; evaluation = ?evaluation; status = #pending };
+                mem.settlementTickets := retainTickets(Array.concat(mem.settlementTickets, [ticket]));
+                let id = addAuditWithEvaluation(action, tier, policyError, ?evaluation, null, ?ticketId, "pending approval");
                 return { tier; error = policyError; ticketId = ?ticketId; auditId = id; settlement = null };
             };
             if (mem.settlementInFlight) {
-                let id = addAudit(action, tier, null, null, null, "settlement lock rejected");
+                let id = addAuditWithEvaluation(action, tier, ?#SettlementInFlight, ?evaluation, null, null, "settlement lock rejected");
                 return { tier; error = ?#SettlementInFlight; ticketId = null; auditId = id; settlement = null };
             };
             mem.settlementInFlight := true;
-            mem.settlementLock := ?{ action; startedAt = Time.now(); ticketId = null; intent = null };
+            mem.settlementLock := ?{ action; startedAt = now; ticketId = null; profile = ?{ id = profile.id; name = profile.name; revision = profile.revision }; intent = null };
             let result = await* settle(action, fee);
+            // Record spend and policy state BEFORE clearing the lock, so a trap
+            // cannot lose bookkeeping after a successful ledger debit.
+            switch (result) {
+                case (#success(receipt)) {
+                     mem.spend := Array.concat(mem.spend, [{ timestamp = Time.now(); token; amount = amountOf(action); fee = receiptFee(receipt) }]);
+                     ignore syncActivePolicyIfCurrent(profile.id, profile.revision, P.recordSuccess(profile.policy));
+                     pruneSpend(Time.now());
+                };
+                case (#failure(_)) { ignore syncActivePolicyIfCurrent(profile.id, profile.revision, P.recordFailure(profile.policy)) };
+            };
+            let id = addAuditWithEvaluation(action, tier, null, ?evaluation, ?result, null, "autonomous settlement");
+            // NOW clear the lock — all bookkeeping above is committed
             switch (result) {
                 case (#success(_)) { mem.settlementInFlight := false; mem.settlementLock := null };
                 case (#failure(error)) {
-                    // A partial result means an external leg may have committed
-                    // while its response was lost. Keep the durable lock and the
-                    // in-flight guard until recoverSettlementLock reconciles it.
                     if (not error.partial) { mem.settlementInFlight := false; mem.settlementLock := null };
                 };
             };
-            switch (result) {
-                case (#success(receipt)) {
-                    mem.spend := Array.concat(mem.spend, [{ timestamp = Time.now(); token; amount = amountOf(action); fee = receiptFee(receipt) }]);
-                    mem.policy := P.recordSuccess(mem.policy);
-                };
-                case (#failure(_)) { mem.policy := P.recordFailure(mem.policy) };
-            };
-            let id = addAudit(action, tier, null, ?result, null, "autonomous settlement");
             {
                 tier;
                 error = switch (result) { case (#failure(e)) ?#ExternalFailure(e); case (_) null };
@@ -722,6 +895,8 @@ module {
             let now = Time.now();
             #ok({
                 balances = mem.liveBalances;
+                policies = mem.policies;
+                activePolicyId = mem.activePolicyId;
                 policy = mem.policy;
                 spend = Array.map<V.TokenLimit, TokenSpend>(mem.policy.limits, func(tl) {
                     {
@@ -738,7 +913,7 @@ module {
                 // the memo/created_at_time key is backend-only reconciliation detail.
                 settlementLock = switch (mem.settlementLock) {
                     case null null;
-                    case (?lock) ?{ action = lock.action; startedAt = lock.startedAt };
+                    case (?lock) ?{ action = lock.action; startedAt = lock.startedAt; profile = lock.profile; stage = switch (lock.intent) { case null null; case (?intent) ?stageName(intent.stage) } };
                 };
                 dexConfig = mem.dexConfig;
                 depositAccount = { owner = calls.canister_principal; subaccount = Blob.toArray(mem.vaultSubaccount) };
@@ -763,8 +938,64 @@ module {
             await* sync(token);
         };
 
+        public func /*update*/syncAllBalances() : async* [BalanceResult] {
+            var results : [BalanceResult] = [];
+            for (balance in mem.liveBalances.vals()) {
+                results := Array.append(results, [await* sync(balance.token.id)]);
+            };
+            results;
+        };
+
         public func /*update*/proposeTransfer(token : Principal, recipient : Principal, amount : Nat, reason : Text) : async* OutcomeResult {
             #ok(await* proposeAction(#transfer({ token; recipient; amount; reason })));
+        };
+
+        // Read-only classification preview: classifies a hypothetical transfer
+        // against the active policy without settling. Lets an agent check whether
+        // a proposal would settle autonomously or escalate before committing a
+        // settlement call. Returns the live fee, current vault balance, and
+        // per-token spend utilisation so the agent can reason about budget
+        // consumption.
+        public func /*update*/evaluateTransfer(token : Principal, recipient : Principal, amount : Nat, reason : Text) : async* EvaluationResult {
+            if (Text.size(reason) > 2_000) return #err(#InvalidPolicy);
+            switch (assertNotSettling()) {
+                case (?error) return #err(error);
+                case null;
+            };
+            let profile = switch (activeProfile()) {
+            case null { return #err(#PolicyProfileNotFound) };
+            case (?value) value;
+            };
+            let fee = switch (await* classificationFee(#transfer({ token; recipient; amount; reason }))) {
+            case (#ok(value)) value;
+            case (#err(error)) { return #err(error) };
+            };
+            let now = Time.now();
+            let hourly = P.spendIn(mem.spend, token, now, 3_600_000_000_000);
+            let daily = P.spendIn(mem.spend, token, now, 86_400_000_000_000);
+            let debit = amount + fee;
+            let (tier, policyError) = P.classify(#transfer({ token; recipient; amount; reason }), profile.policy, fee, hourly, daily);
+            let limits = P.limitFor(profile.policy, token);
+            func vaultBalance() : Nat {
+                for (b in mem.liveBalances.vals()) {
+                    if (b.token.id == token) return b.amount;
+                };
+                0;
+            };
+            #ok({
+                tier;
+                policyError;
+                fee;
+                balance = vaultBalance();
+                spend = {
+                    perTx = debit;
+                    hourly;
+                    daily;
+                    maxPerTx = switch limits { case (?l) l.maxPerTx; case null 0 };
+                    maxHourly = switch limits { case (?l) l.maxHourlySpend; case null 0 };
+                    maxDaily = switch limits { case (?l) l.maxDailySpend; case null 0 };
+                };
+            });
         };
 
         // Swaps are real but never autonomous: every proposal parks as an owner
@@ -781,19 +1012,60 @@ module {
             let ticket = switch (found) { case (null) return #err(#TicketNotFound); case (?value) value };
             if (ticket.status != #pending) return #err(#AlreadyResolved);
             if (mem.settlementInFlight) return #err(#SettlementInFlight);
-            // Re-classify at approval time: policy may have tightened since the
-            // ticket was parked, and the breaker may have tripped.
+            let profile = switch (activeProfile()) {
+                case null return #err(#PolicyProfileNotFound);
+                case (?value) value;
+            };
+            switch (ticket.evaluation) {
+                case null return #err(#PolicyRevisionChanged);
+                case (?evaluation) {
+                    if (evaluation.profileId != profile.id) {
+                        ignore addAuditWithEvaluation(ticket.action, #Forbidden, ?#PolicyProfileNotActive, ?evaluation, null, ?ticketId, "approval blocked: policy profile is no longer active");
+                        return #err(#PolicyProfileNotActive);
+                    };
+                    if (evaluation.revision != profile.revision) {
+                        ignore addAuditWithEvaluation(ticket.action, #Forbidden, ?#PolicyRevisionChanged, ?evaluation, null, ?ticketId, "approval blocked: policy profile revision changed");
+                        return #err(#PolicyRevisionChanged);
+                    };
+                };
+            };
+            // Re-classify at approval time against the same unchanged profile.
             let token = spendToken(ticket.action);
             let fee = switch (await* classificationFee(ticket.action)) {
                 case (#ok(value)) value;
                 case (#err(error)) return #err(error);
             };
-            let (tier, currentError) = P.classify(ticket.action, mem.policy, fee, P.spendIn(mem.spend, token, Time.now(), 3_600_000_000_000), P.spendIn(mem.spend, token, Time.now(), 86_400_000_000_000));
-            if (tier == #Forbidden) return #err(switch (currentError) { case (?e) e; case (null) #CircuitBreakerActive });
-            if (tier != #Escalation or currentError != ticket.policyError) return #err(switch (currentError) { case (?e) e; case (null) #AlreadyResolved });
+            let now = Time.now();
+            let hourly = P.spendIn(mem.spend, token, now, 3_600_000_000_000);
+            let daily = P.spendIn(mem.spend, token, now, 86_400_000_000_000);
+            let debit = amountOf(ticket.action) + fee;
+            let (tier, currentError) = P.classify(ticket.action, profile.policy, fee, hourly, daily);
+            let currentEvaluation = evaluationFor(profile, tier, currentError, ?fee, ?hourly, ?daily, ?(hourly + debit), ?(daily + debit));
+            if (tier == #Forbidden) {
+                ignore addAuditWithEvaluation(ticket.action, tier, currentError, ?currentEvaluation, null, ?ticketId, "approval blocked: active profile no longer permits this action");
+                return #err(switch (currentError) { case (?e) e; case (null) #CircuitBreakerActive });
+            };
+            if (tier != #Escalation or currentError != ticket.policyError) {
+                ignore addAuditWithEvaluation(ticket.action, tier, currentError, ?currentEvaluation, null, ?ticketId, "approval blocked: profile budget or escalation condition changed");
+                return #err(switch (currentError) { case (?e) e; case (null) #AlreadyResolved });
+            };
             mem.settlementInFlight := true;
-            mem.settlementLock := ?{ action = ticket.action; startedAt = Time.now(); ticketId = ?ticketId; intent = null };
+            mem.settlementLock := ?{ action = ticket.action; startedAt = Time.now(); ticketId = ?ticketId; profile = ?{ id = profile.id; name = profile.name; revision = profile.revision }; intent = null };
             let result = await* settle(ticket.action, fee);
+            // Record ticket status, spend, and policy state BEFORE clearing the
+            // lock, so a trap cannot lose bookkeeping after a successful debit.
+            switch (result) {
+                case (#success(receipt)) {
+                    mem.settlementTickets := retainTickets(Array.map<Ticket, Ticket>(mem.settlementTickets, func(t) { if (t.id == ticketId) ({ id = t.id; action = t.action; createdAt = t.createdAt; policyError = t.policyError; evaluation = t.evaluation; status = #approved(receipt) }) else t }));
+                    mem.spend := Array.concat(mem.spend, [{ timestamp = Time.now(); token; amount = amountOf(ticket.action); fee = receiptFee(receipt) }]);
+                     ignore syncActivePolicyIfCurrent(profile.id, profile.revision, P.recordSuccess(profile.policy));
+                     pruneSpend(Time.now());
+                };
+                case (#failure(_)) { ignore syncActivePolicyIfCurrent(profile.id, profile.revision, P.recordFailure(profile.policy)) };
+            };
+            let id = addAuditWithEvaluation(ticket.action, tier, currentError, ?currentEvaluation, ?result, ?ticketId,
+                switch (result) { case (#success(_)) "owner approved and settled"; case (#failure(_)) "approval settlement failed" });
+            // NOW clear the lock — all bookkeeping above is committed
             switch (result) {
                 case (#success(_)) { mem.settlementInFlight := false; mem.settlementLock := null };
                 case (#failure(error)) {
@@ -801,22 +1073,15 @@ module {
                 };
             };
             switch (result) {
-                case (#success(receipt)) {
-                    mem.settlementTickets := retainTickets(Array.map<Ticket, Ticket>(mem.settlementTickets, func(t) { if (t.id == ticketId) ({ id = t.id; action = t.action; createdAt = t.createdAt; policyError = t.policyError; status = #approved(receipt) }) else t }));
-                    mem.spend := Array.concat(mem.spend, [{ timestamp = Time.now(); token; amount = amountOf(ticket.action); fee = receiptFee(receipt) }]);
-                    mem.policy := P.recordSuccess(mem.policy);
-                    let id = addAudit(ticket.action, tier, currentError, ?result, ?ticketId, "owner approved and settled");
-                    #ok({ tier; error = null; ticketId = ?ticketId; auditId = id; settlement = ?result });
-                };
+                case (#success(_)) #ok({ tier; error = null; ticketId = ?ticketId; auditId = id; settlement = ?result });
                 case (#failure(e)) {
-                    mem.policy := P.recordFailure(mem.policy);
-                    ignore addAudit(ticket.action, tier, currentError, ?result, ?ticketId, "approval settlement failed");
-                    #err(#ExternalFailure(e));
+                    if (e.code == "INSUFFICIENT_BALANCE" and not e.partial) #err(#InsufficientBalance) else #err(#ExternalFailure(e));
                 };
             };
         };
 
         public func /*update*/rejectTicket(ticketId : Nat, reason : Text) : IdResult {
+            if (Text.size(reason) > 2_000) return #err(#InvalidPolicy);
             var found = false;
             var pendingTicket = false;
             var action : ?Action = null;
@@ -825,14 +1090,15 @@ module {
             };
             if (not found) return #err(#TicketNotFound);
             if (not pendingTicket) return #err(#AlreadyResolved);
-            mem.settlementTickets := retainTickets(Array.map<Ticket, Ticket>(mem.settlementTickets, func(t) { if (t.id == ticketId) ({ id = t.id; action = t.action; createdAt = t.createdAt; policyError = t.policyError; status = #rejected(reason) }) else t }));
+            mem.settlementTickets := retainTickets(Array.map<Ticket, Ticket>(mem.settlementTickets, func(t) { if (t.id == ticketId) ({ id = t.id; action = t.action; createdAt = t.createdAt; policyError = t.policyError; evaluation = t.evaluation; status = #rejected(reason) }) else t }));
             let id = addAudit(switch (action) { case (?a) a; case (null) return #err(#TicketNotFound) }, #Escalation, null, null, ?ticketId, "owner rejected: " # reason);
             #ok(id);
         };
 
         // ----- admin (update; owner-only — excluded from agent_entrypoints) -----
         public func /*update*/setDexConfig(next : DexConfig) : UnitResult {
-            if (next.feeTier == 0) return #err(#InvalidAmount);
+            switch (assertNotSettling()) { case (?error) return #err(error); case null; };
+            if (next.feeTier == 0 or next.feeTier > 10000) return #err(#InvalidAmount);
             if (next.factory != Principal.fromText("4mmnk-kiaaa-aaaag-qbllq-cai")) return #err(#DexNotAllowed);
             mem.dexConfig := next;
             #ok(());
@@ -873,7 +1139,8 @@ module {
                                     func commit(blockIndex : Nat, note : Text) : UnitResult {
                                         let receipt : Receipt = #transfer({ token = p.token; blockIndex; fee = intent.fee });
                                         mem.spend := Array.concat(mem.spend, [{ timestamp = Time.now(); token = p.token; amount = p.amount; fee = intent.fee }]);
-                                        mem.policy := P.recordSuccess(mem.policy);
+                                        ignore syncActivePolicy(P.recordSuccess(mem.policy));
+                                        pruneSpend(Time.now());
                                         approveRecoveredTicket(lock.ticketId, receipt);
                                         mem.settlementInFlight := false;
                                         mem.settlementLock := null;
@@ -896,7 +1163,7 @@ module {
                                             // The ledger checks dedup BEFORE balance/fee, so a
                                             // deterministic rejection here proves no duplicate
                                             // existed — the original debit never committed.
-                                            mem.policy := P.recordFailure(mem.policy);
+                                            ignore syncActivePolicy(P.recordFailure(mem.policy));
                                             mem.settlementInFlight := false;
                                             mem.settlementLock := null;
                                             ignore addAudit(lock.action, #Autonomous, null, ?external("LEDGER_ERROR", Icrc.transferErrorText(txError), false), null, "reconciled: original settlement did not commit (" # Icrc.transferErrorText(txError) # ")");
@@ -914,7 +1181,7 @@ module {
                                         #err(#ExternalFailure({ code = "RECONCILE_INCONCLUSIVE"; message = reason; partial = true }));
                                     };
                                     func failed(note : Text) : UnitResult {
-                                        mem.policy := P.recordFailure(mem.policy);
+                                        ignore syncActivePolicy(P.recordFailure(mem.policy));
                                         mem.settlementInFlight := false;
                                         mem.settlementLock := null;
                                         ignore addAudit(lock.action, #Escalation, null, ?external("SWAP_RECOVERED_FAILURE", note, false), lock.ticketId, note);
@@ -933,7 +1200,8 @@ module {
                                                     fee = intent.fromFee * 3;
                                                 });
                                                 mem.spend := Array.concat(mem.spend, [{ timestamp = Time.now(); token = p.fromToken; amount = p.amount; fee = intent.fromFee * 3 }]);
-                                                mem.policy := P.recordSuccess(mem.policy);
+                                                ignore syncActivePolicy(P.recordSuccess(mem.policy));
+                                                pruneSpend(Time.now());
                                                 approveRecoveredTicket(lock.ticketId, receipt);
                                                 mem.settlementInFlight := false;
                                                 mem.settlementLock := null;
@@ -1015,6 +1283,7 @@ module {
                                             };
                                         };
                                         case (#approval) {
+                                            if (Time.now() > p.quoteExpiresAt) return inconclusive("swap quote expired during recovery; approval and pool legs are not re-run automatically");
                                             let fromToken = switch (intent.fromToken) { case (?value) value; case null return inconclusive("approval intent has no input token") };
                                             let pool = switch (intent.pool) { case (?value) value; case null return inconclusive("approval intent has no pool") };
                                             switch (Icrc.decodeApprove(await* calls.call(Icrc.approveRequest(fromToken, null, { owner = pool; subaccount = null }, intent.amount, intent.fee, null, null, ?intent.createdAtTime, ?intent.memo)))) {
@@ -1183,15 +1452,92 @@ module {
             };
         };
 
-        public func /*update*/setPolicy(next : Policy) : UnitResult {
+        public func /*update*/createPolicyProfile(name : Text, next : Policy) : IdResult {
+            if (name == "" or name.size() > 64) return #err(#InvalidPolicyName);
             if (not P.validPolicy(next)) return #err(#InvalidPolicy);
-            mem.policy := next;
+            for (profile in mem.policies.vals()) { if (profile.name == name) return #err(#InvalidPolicyName) };
+            let id = mem.nextPolicyId;
+            mem.nextPolicyId += 1;
+            // A new profile starts clean: circuit breaker and consecutive failures
+            // are runtime state, never configuration. Force them to defaults so a
+            // profile created while the breaker is tripped does not inherit it.
+            let cleanPolicy = { next with circuitBreaker = false; consecutiveFailures = 0 };
+            mem.policies := Array.concat(mem.policies, [{ id; name; revision = 0; policy = cleanPolicy }]);
+            #ok(id);
+        };
+
+        public func /*update*/updatePolicyProfile(id : Nat, name : Text, next : Policy) : UnitResult {
+            switch (assertNotSettling()) { case (?error) return #err(error); case null; };
+            if (name == "" or name.size() > 64) return #err(#InvalidPolicyName);
+            if (not P.validPolicy(next)) return #err(#InvalidPolicy);
+            for (profile in mem.policies.vals()) { if (profile.id != id and profile.name == name) return #err(#InvalidPolicyName) };
+            var found = false;
+            mem.policies := Array.map<PolicyProfile, PolicyProfile>(mem.policies, func(profile) {
+                if (profile.id == id) {
+                    found := true;
+                    { id = profile.id; name; revision = profile.revision + 1; policy = { next with circuitBreaker = profile.policy.circuitBreaker; consecutiveFailures = profile.policy.consecutiveFailures } };
+                } else profile;
+            });
+            if (not found) return #err(#PolicyProfileNotFound);
+            if (id == mem.activePolicyId) {
+                switch (activeProfile()) {
+                    case null return #err(#PolicyProfileNotFound);
+                    case (?profile) mem.policy := { next with circuitBreaker = profile.policy.circuitBreaker; consecutiveFailures = profile.policy.consecutiveFailures };
+                };
+            };
             #ok(());
         };
 
-        public func /*update*/setCircuitBreaker(active : Bool) : UnitResult {
-            mem.policy := { mem.policy with circuitBreaker = active };
+        public func /*update*/setActivePolicyProfile(id : Nat) : UnitResult {
+            switch (assertNotSettling()) { case (?error) return #err(error); case null; };
+            for (profile in mem.policies.vals()) {
+                if (profile.id == id) {
+                    mem.activePolicyId := id;
+                    mem.policy := profile.policy;
+                    return #ok(());
+                };
+            };
+            #err(#PolicyProfileNotFound);
+        };
+
+        public func /*update*/deletePolicyProfile(id : Nat) : UnitResult {
+            if (id == mem.activePolicyId) return #err(#ActivePolicyDeletion);
+            if (mem.policies.size() <= 1) return #err(#ActivePolicyDeletion);
+            var found = false;
+            mem.policies := Array.filter<PolicyProfile>(mem.policies, func(profile) { if (profile.id == id) { found := true; false } else true });
+            if (not found) return #err(#PolicyProfileNotFound);
             #ok(());
+        };
+
+        public func /*update*/setPolicy(next : Policy) : UnitResult {
+            switch (assertNotSettling()) { case (?error) return #err(error); case null; };
+            if (not P.validPolicy(next)) return #err(#InvalidPolicy);
+            switch (activeProfile()) {
+                case null #err(#PolicyProfileNotFound);
+                case (?profile) {
+                    let preserved = { next with circuitBreaker = profile.policy.circuitBreaker; consecutiveFailures = profile.policy.consecutiveFailures };
+                    mem.policies := Array.map<PolicyProfile, PolicyProfile>(mem.policies, func(candidate) {
+                        if (candidate.id == profile.id) { { id = candidate.id; name = candidate.name; revision = candidate.revision + 1; policy = preserved } } else candidate
+                    });
+                    mem.policy := preserved;
+                    #ok(());
+                };
+            }
+        };
+
+        public func /*update*/setCircuitBreaker(active : Bool) : UnitResult {
+            switch (assertNotSettling()) { case (?error) return #err(error); case null; };
+            switch (activeProfile()) {
+                case null #err(#PolicyProfileNotFound);
+                case (?profile) {
+                    let next = { profile.policy with circuitBreaker = active; consecutiveFailures = if (active) profile.policy.consecutiveFailures else 0 };
+                    ignore syncActivePolicy(next);
+                    mem.policies := Array.map<PolicyProfile, PolicyProfile>(mem.policies, func(candidate) {
+                        if (candidate.id == profile.id) { { id = candidate.id; name = candidate.name; revision = candidate.revision + 1; policy = next } } else candidate
+                    });
+                    #ok(());
+                };
+            }
         };
     };
 /*---NEUTRON GENERATED BEGIN---*/
@@ -1208,8 +1554,14 @@ public type getPendingApprovals_Output = PendingResult;
 public type syncBalance_Input = (token : Principal);
 public type syncBalance_Output = BalanceResult;
 
+public type syncAllBalances_Input = ();
+public type syncAllBalances_Output = [BalanceResult];
+
 public type proposeTransfer_Input = (token : Principal, recipient : Principal, amount : Nat, reason : Text);
 public type proposeTransfer_Output = OutcomeResult;
+
+public type evaluateTransfer_Input = (token : Principal, recipient : Principal, amount : Nat, reason : Text);
+public type evaluateTransfer_Output = EvaluationResult;
 
 public type proposeSwap_Input = (fromToken : Principal, toToken : Principal, dex : Principal, amount : Nat, minReturn : Nat, slippageBps : Nat, quoteExpiresAt : Int, reason : Text);
 public type proposeSwap_Output = OutcomeResult;
@@ -1225,6 +1577,18 @@ public type setDexConfig_Output = UnitResult;
 
 public type recoverSettlementLock_Input = ();
 public type recoverSettlementLock_Output = UnitResult;
+
+public type createPolicyProfile_Input = (name : Text, next : Policy);
+public type createPolicyProfile_Output = IdResult;
+
+public type updatePolicyProfile_Input = (id : Nat, name : Text, next : Policy);
+public type updatePolicyProfile_Output = UnitResult;
+
+public type setActivePolicyProfile_Input = (id : Nat);
+public type setActivePolicyProfile_Output = UnitResult;
+
+public type deletePolicyProfile_Input = (id : Nat);
+public type deletePolicyProfile_Output = UnitResult;
 
 public type setPolicy_Input = (next : Policy);
 public type setPolicy_Output = UnitResult;

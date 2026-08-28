@@ -1,0 +1,83 @@
+// Agent Vault — Navigation Bar & Segmented Pill Switcher
+
+.pb-nav-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+
+  .pb-pill-group {
+    display: flex;
+    align-items: center;
+    background: var(--pb-card);
+    border: 1px solid var(--pb-border);
+    border-radius: var(--pb-radius-md);
+    padding: 3px;
+    gap: 2px;
+
+    .pb-pill-btn {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--pb-text-secondary);
+      background: transparent;
+      border: none;
+      border-radius: var(--pb-radius-sm);
+      cursor: pointer;
+      transition: all 0.15s ease;
+
+      svg {
+        color: var(--pb-text-muted);
+        transition: color 0.15s ease;
+      }
+
+      &:hover {
+        color: var(--pb-text-primary);
+        background: var(--pb-subtle);
+
+        svg {
+          color: var(--pb-text-primary);
+        }
+      }
+
+      &.active {
+        color: #ffffff;
+        background: var(--pb-primary);
+
+        svg {
+          color: #ffffff;
+        }
+      }
+    }
+  }
+
+  .pb-refresh-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--pb-text-secondary);
+    background: var(--pb-card);
+    border: 1px solid var(--pb-border);
+    border-radius: var(--pb-radius-md);
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    &:hover:not(:disabled) {
+      color: var(--pb-text-primary);
+      background: var(--pb-card-hover);
+      border-color: var(--pb-text-muted);
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+}

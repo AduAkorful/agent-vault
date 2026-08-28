@@ -1,8 +1,8 @@
 // Agent Vault — resident agent tool surface.
 //
-// Registers 5 tools that map 1:1 to the manifest's `agent_entrypoints`.
-// Read tools use querySelf; write tools use updateSelf and publish a state
-// change so the dashboard tile auto-refreshes.
+// Registers 4 tools that map 1:1 to the manifest's `agent_entrypoints`.
+// Read-like tools (get_*, evaluate_*) return values directly; write tools
+// (propose_*) call publishChange so the dashboard tile auto-refreshes.
 //
 // Modeled on apps/wallet/src/service.ts and apps/kitchensink/src/service.ts.
 
@@ -14,6 +14,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "neutron-tools/app";
+import { PRINCIPAL_PATTERN, extractErrorMessage } from "./utils";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -33,7 +34,7 @@ const emptyInputSchema: JsonObject = {
 };
 
 // Principal inputs: validated raw strings (kernel handles Candid encoding).
-const principalPattern = "^[a-z0-9][a-z0-9-]{3,62}$";
+const principalPattern = PRINCIPAL_PATTERN.source;
 
 const activityInputSchema: JsonObject = {
   type: "object",
@@ -45,18 +46,6 @@ const activityInputSchema: JsonObject = {
   additionalProperties: false,
 };
 
-const syncBalanceInputSchema: JsonObject = {
-  type: "object",
-  required: ["token"],
-  properties: {
-    token: {
-      type: "string",
-      pattern: principalPattern,
-      description: "The ICRC-1 token ledger canister principal to sync.",
-    },
-  },
-  additionalProperties: false,
-};
 
 const proposeTransferInputSchema: JsonObject = {
   type: "object",
@@ -108,9 +97,10 @@ const pendingOutputSchema: JsonObject = {
   items: { type: "object" },
 };
 
-const balanceOutputSchema: JsonObject = {
+const evaluationOutputSchema: JsonObject = {
   type: "object",
-  description: "Synced balance with token metadata: { token: Token, amount: Nat, syncedAt: Int }.",
+  description:
+    "Classification preview: tier (Autonomous/Escalation/Forbidden), policyError, fee, balance, and per-token spend utilisation. No state is modified.",
 };
 
 const outcomeOutputSchema: JsonObject = {
@@ -130,19 +120,16 @@ function unwrapResult(value: JsonValue): JsonObject {
     value !== null &&
     !Array.isArray(value)
   ) {
-    const obj = value as Record<string, JsonValue>;
+    const obj = value as Record<string, unknown>;
     if ("ok" in obj) return obj.ok as JsonObject;
     if ("err" in obj) {
-      const err = obj.err;
-      const message =
-        typeof err === "object" && err !== null && "message" in (err as Record<string, unknown>)
-          ? String((err as Record<string, unknown>).message)
-          : JSON.stringify(err);
-      throw new Error(message);
+      throw new Error(extractErrorMessage(obj.err));
     }
+    throw new Error(`malformed result envelope: ${JSON.stringify(value)}`);
   }
-  // If the response isn't a variant wrapper, return it as-is.
-  return value as JsonObject;
+  // Neutron self-calls return the unwrapped success value; direct Candid calls
+  // return the Result variant handled above.
+  throw new Error(`malformed result envelope: ${JSON.stringify(value)}`);
 }
 
 async function publishChange(): Promise<void> {
@@ -189,7 +176,7 @@ exposeTool(
     return unwrapResult(
       // Nat args must cross the kernel as decimal strings (icblast encoding),
       // else AJV rejects the self-call before the backend runs.
-      await querySelf("getActivityHistory", [String(limit), String(offset)]),
+      await querySelf("getActivityHistory", [[String(limit), String(offset)]]),
     );
   },
 );
@@ -197,22 +184,25 @@ exposeTool(
 // get_pending_approvals is not an agent entrypoint (Neutron limits to 4),
 // but it remains accessible to the dashboard tile via preapproved_self_calls.
 
-// 3. sync_balance — refresh one token's balance from its ledger.
+// 3. evaluate_transfer — preview classification without settling.
 exposeTool(
-  "sync_balance",
+  "evaluate_transfer",
   {
-    title: "Sync Token Balance",
+    title: "Evaluate Transfer Against Policy",
     description:
-      "Query one ICRC-1 token ledger for its symbol, decimals, fee, and the vault's current balance. Updates the vault's cached state.",
-    inputSchema: syncBalanceInputSchema,
-    outputSchema: balanceOutputSchema,
-    annotations: { "neutron:effects": ["write", "network"] },
+      "Check whether a proposed transfer would settle autonomously or escalate to owner approval — WITHOUT sending any funds. Returns the classification tier (Autonomous/Escalation/Forbidden), the policy error (if any), the live ledger fee, the vault's current balance for the token, and per-token spend utilisation (hourly, daily, per-tx limits). Use this before propose_transfer to avoid failed settlements.",
+    inputSchema: proposeTransferInputSchema,
+    outputSchema: evaluationOutputSchema,
+    annotations: { "neutron:effects": ["network"] },
   },
   async (args) => {
     const token = requirePrincipalString(args.token, "token");
-    const result = unwrapResult(await updateSelf("syncBalance", [token]));
-    await publishChange();
-    return result;
+    const recipient = requirePrincipalString(args.recipient, "recipient");
+    const amount = requireNonNegativeAmountString(args.amount, "amount");
+    const reason = requireBoundedText(args.reason, "reason", 500);
+    return unwrapResult(
+      await updateSelf("evaluateTransfer", [[token, recipient, amount, reason]]),
+    );
   },
 );
 
@@ -233,7 +223,7 @@ exposeTool(
     const amount = requireAmountString(args.amount, "amount");
     const reason = requireBoundedText(args.reason, "reason", 500);
     const result = unwrapResult(
-      await updateSelf("proposeTransfer", [token, recipient, amount, reason]),
+      await updateSelf("proposeTransfer", [[token, recipient, amount, reason]]),
     );
     await publishChange();
     return result;
@@ -248,7 +238,7 @@ function requirePrincipalString(
   value: JsonValue | undefined,
   label: string,
 ): string {
-  if (typeof value !== "string" || !/^[a-z0-9][a-z0-9-]{3,62}$/.test(value)) {
+  if (typeof value !== "string" || !PRINCIPAL_PATTERN.test(value)) {
     throw new Error(`${label} must be a valid canister principal`);
   }
   return value;
@@ -261,6 +251,18 @@ function requireAmountString(
   if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) {
     throw new Error(
       `${label} must be a positive integer string in base units`,
+    );
+  }
+  return value;
+}
+
+function requireNonNegativeAmountString(
+  value: JsonValue | undefined,
+  label: string,
+): string {
+  if (typeof value !== "string" || !/^[0-9]+$/.test(value)) {
+    throw new Error(
+      `${label} must be a non-negative integer string in base units`,
     );
   }
   return value;

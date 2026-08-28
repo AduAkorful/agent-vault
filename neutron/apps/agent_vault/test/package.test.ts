@@ -12,7 +12,9 @@ const backendUrl = new URL("../backend/main.mo", import.meta.url);
 const QUERY_METHODS = ["getVaultState", "getActivityHistory", "getPendingApprovals"];
 const UPDATE_METHODS = [
   "syncBalance",
+  "syncAllBalances",
   "proposeTransfer",
+  "evaluateTransfer",
   "proposeSwap",
   "approveTicket",
   "rejectTicket",
@@ -20,6 +22,10 @@ const UPDATE_METHODS = [
   "recoverSettlementLock",
   "setPolicy",
   "setCircuitBreaker",
+  "createPolicyProfile",
+  "updatePolicyProfile",
+  "setActivePolicyProfile",
+  "deletePolicyProfile",
 ];
 
 // The updates that await settlement/sync over the backend_calls capability are
@@ -31,7 +37,9 @@ const UPDATE_METHODS = [
 // original debit committed, and that answer only comes from the ledger.
 const ASYNC_UPDATE_METHODS = new Set([
   "syncBalance",
+  "syncAllBalances",
   "proposeTransfer",
+  "evaluateTransfer",
   "proposeSwap",
   "approveTicket",
   "recoverSettlementLock",
@@ -52,7 +60,7 @@ test("agent_vault manifest validates and declares the vault surface", async () =
   expect(result.valid).toBe(true);
   expect(manifest).toMatchObject({
     id: "agent_vault",
-    version: 100,
+     version: 101,
     update_source: "233tv-xiaaa-aaaay-aacta-cai",
     src: "main.mo",
     tiles: [
@@ -85,7 +93,7 @@ test("agent_vault emits a build-time schema for every declared method", async ()
   expect(artifact.app).toMatchObject({
     id: "agent_vault",
     name: "Agent Vault",
-    version: 100,
+     version: 101,
   });
 
   // The whole point of the wire-type relocation: every method resolves to a

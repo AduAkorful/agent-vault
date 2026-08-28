@@ -1,91 +1,65 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type FrameLocator, type Page } from "@playwright/test";
 import { localCanisterOrigin } from "neutron-tools/src/runtime.js";
 import { resolveLocalNeutronRuntime } from "../../packages/neutron-provision/src/local_session.ts";
 
-test("Agent Vault full end-to-end lifecycle on local PocketIC kernel", async ({
-  page,
-}) => {
-  const runtime = resolveLocalNeutronRuntime();
+test("Agent Vault operator console is responsive and live on local PocketIC", async ({ page }) => {
+  const runtime = resolveLocalNeutronRuntime({ configPath: "agent-vault-live.ndeploy.json" });
   const consoleErrors: string[] = [];
-  page.on("console", (message) => {
-    if (message.type() === "error") {
-      consoleErrors.push(message.text());
-    }
-  });
+  const failedRequests: string[] = [];
+  page.on("console", (message) => { if (message.type() === "error" && !message.text().includes("favicon")) consoleErrors.push(message.text()); });
+  page.on("requestfailed", (request) => failedRequests.push(`${request.method()} ${request.url()}`));
 
-  // 1. Navigate to the local Neutron OS canister gateway
-  await page.goto(
-    localCanisterOrigin(runtime.canisterId, runtime.gatewayUrl),
-  );
-
-  // 2. Authenticate as the authorized local developer
+  await page.goto(localCanisterOrigin(runtime.canisterId, runtime.gatewayUrl));
   await expect(page.locator('[data-tid="login-button"]')).toBeVisible();
-  const principal = await page.evaluate(async (identitySeed) => {
-    const login = (
-      window as typeof window & {
-        __NEUTRON_PLAYWRIGHT_LOGIN_AS__?: (seed: number) => Promise<string>;
-      }
-    ).__NEUTRON_PLAYWRIGHT_LOGIN_AS__;
+  const principal = await page.evaluate(async (seed) => {
+    const login = (window as typeof window & { __NEUTRON_PLAYWRIGHT_LOGIN_AS__?: (value: number) => Promise<string> }).__NEUTRON_PLAYWRIGHT_LOGIN_AS__;
     if (!login) throw new Error("Local Playwright login is unavailable");
-    return login(identitySeed);
+    return login(seed);
   }, runtime.developerIdentitySeed);
   expect(principal).toBe(runtime.developerIdentityPrincipal);
-
-  // 3. Open the launcher and launch the Agent Vault dashboard tile
   await openLauncher(page);
-  const vaultTile = page.locator('[data-tid="launcher-tile-agent_vault-dashboard"]');
-  await expect(vaultTile).toBeVisible();
-  await vaultTile.click();
+  await page.locator('[data-tid="launcher-tile-agent_vault-dashboard"]').click();
+  const frame = page.frameLocator('iframe[data-app-id="agent_vault"][data-tile-id="dashboard"]');
+  await expect(frame.locator(".console-app")).toBeVisible();
 
-  // 4. Verify the sandboxed tile iframe is rendered
-  const iframeLocator = page.locator(
-    'iframe[data-app-id="agent_vault"][data-tile-id="dashboard"]',
-  );
-  await expect(iframeLocator).toHaveAttribute("sandbox", "allow-scripts");
-  const vault = page.frameLocator(
-    'iframe[data-app-id="agent_vault"][data-tile-id="dashboard"]',
-  );
-  await expect(vault.locator(".vault-shell")).toBeVisible();
+  for (const viewport of [{ width: 1440, height: 960, name: "desktop" }, { width: 820, height: 900, name: "tablet" }, { width: 390, height: 844, name: "mobile" }]) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await expect(frame.getByRole("heading", { name: "Daily oversight" })).toBeVisible();
+    await assertNoHorizontalOverflow(frame);
+    if (viewport.name === "mobile") { await expect(frame.locator(".mobile-nav")).toBeVisible(); await expect(frame.locator(".desktop-nav")).toBeHidden(); }
+    else await expect(frame.locator(".desktop-nav")).toBeVisible();
+    await page.screenshot({ path: `screenshot_agent_vault_${viewport.name}_command.png`, fullPage: true });
+  }
 
-  // -------------------------------------------------------------------------
-  // 5. Panel 1: Portfolio Overview
-  // -------------------------------------------------------------------------
-  await expect(vault.locator(".vault-panel-title")).toHaveText("Portfolio Overview");
-  await expect(vault.getByText("Hourly Budget")).toBeVisible();
-  await expect(vault.getByText("Daily Budget")).toBeVisible();
-  await page.screenshot({ path: "screenshot_portfolio.png", fullPage: true });
+  for (const [label, heading] of [["Policy", "Guardrails"], ["Activity", "Decision log"], ["Approvals", "Decisions waiting"]] as const) {
+    await clickWorkspace(frame, label);
+    await expect(frame.getByRole("heading", { name: heading })).toBeVisible();
+    await assertNoHorizontalOverflow(frame);
+    await page.screenshot({ path: `screenshot_agent_vault_${label.toLowerCase()}.png`, fullPage: true });
+  }
 
-  // -------------------------------------------------------------------------
-  // 6. Panel 2: Policy Control Matrix & Interactive Circuit Breaker Toggle
-  // -------------------------------------------------------------------------
-  await vault.getByRole("button", { name: "Policy" }).click();
-  await expect(vault.locator(".vault-panel-title")).toHaveText("Policy Control Matrix");
-  await expect(vault.getByText("Per Transaction")).toBeVisible();
-  await expect(vault.getByText("Hourly Limit")).toBeVisible();
-  await expect(vault.getByText("Daily Limit")).toBeVisible();
-  await page.screenshot({ path: "screenshot_policy.png", fullPage: true });
-
-  // -------------------------------------------------------------------------
-  // 7. Panel 3: Live Agent Activity Feed
-  // -------------------------------------------------------------------------
-  await vault.getByRole("button", { name: "Activity" }).click();
-  await expect(vault.locator(".vault-panel-title")).toHaveText("Agent Activity Feed");
-  await page.screenshot({ path: "screenshot_activity.png", fullPage: true });
-
-  // -------------------------------------------------------------------------
-  // 8. Panel 4: Pending Approvals Inbox
-  // -------------------------------------------------------------------------
-  await vault.getByRole("button", { name: "Approvals" }).click();
-  await expect(vault.locator(".vault-panel-title")).toHaveText("Pending Approvals");
-  await page.screenshot({ path: "screenshot_approvals.png", fullPage: true });
-
-  // Return to Portfolio and capture main screenshot
-  await vault.getByRole("button", { name: "Portfolio" }).click();
-  await expect(vault.locator(".vault-panel-title")).toHaveText("Portfolio Overview");
-  await page.screenshot({ path: "agent_vault_live_dashboard.png", fullPage: true });
-
-  expect(consoleErrors.filter((e) => !e.includes("favicon"))).toEqual([]);
+  await clickWorkspace(frame, "Policy");
+  await frame.getByRole("button", { name: "Add token budget" }).click();
+  await frame.getByRole("button", { name: "Save policy" }).click();
+  await expect(frame.getByRole("alert")).toContainText("valid token principal");
+  await clickWorkspace(frame, "Activity");
+  await expect(frame.getByText("No activity yet", { exact: true })).toBeVisible();
+  await expect(frame.locator(".activity-export button")).toBeVisible();
+  await clickWorkspace(frame, "Approvals");
+  await expect(frame.getByText("No decisions waiting", { exact: true })).toBeVisible();
+  await expect(frame.locator(".status-chip.warning")).toBeVisible();
+  expect(consoleErrors).toEqual([]);
+  expect(failedRequests).toEqual([]);
 });
+
+async function assertNoHorizontalOverflow(frame: FrameLocator): Promise<void> {
+  const overflow = await frame.locator(".console-app").evaluate((element) => element.scrollWidth > element.clientWidth + 1);
+  expect(overflow, "console shell must not overflow horizontally").toBe(false);
+}
+
+async function clickWorkspace(frame: FrameLocator, label: string): Promise<void> {
+  await frame.locator(".nav-button:visible").filter({ hasText: label }).first().click();
+}
 
 async function openLauncher(page: Page): Promise<void> {
   await page.locator('[data-tid="launcher-open"]').click();

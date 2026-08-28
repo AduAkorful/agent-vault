@@ -1,0 +1,33 @@
+// Agent Vault — Base Resets & Application Shell
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+.vault-app {
+  background-color: var(--pb-bg);
+  color: var(--pb-text-primary);
+  font-family: var(--pb-font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  min-height: 100dvh;
+  padding: 24px 32px;
+  width: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  .vault-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    margin: 0 auto;
+    max-width: 100%;
+    width: 100%;
+  }
+
+  .pb-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+}

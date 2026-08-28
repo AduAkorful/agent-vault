@@ -1,7 +1,7 @@
 // Pure policy engine — no state, no I/O, no external calls. This is the
 // classification core that decides Autonomous vs Escalation vs Forbidden, and
 // owns policy validation plus spend-window/circuit-breaker accounting.
-import V "../memory/agentvault/v1";
+import V "../memory/agentvault/v2";
 
 module {
     public func contains(xs : [Principal], x : Principal) : Bool {

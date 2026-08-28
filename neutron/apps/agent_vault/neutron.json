@@ -2,7 +2,7 @@
   "format": 3,
   "id": "agent_vault",
   "name": "Agent Vault",
-  "version": 100,
+  "version": 101,
   "update_source": "233tv-xiaaa-aaaay-aacta-cai",
   "description": "Policy-governed vault: agents propose, humans approve, real ICRC-1 settlement",
   "src": "main.mo",
@@ -162,8 +162,9 @@
       "methods": [
         "getVaultState",
         "getActivityHistory",
-        "getPendingApprovals",
         "syncBalance",
+        "syncAllBalances",
+        "evaluateTransfer",
         "proposeTransfer",
         "proposeSwap",
         "approveTicket",
@@ -171,7 +172,11 @@
         "setDexConfig",
         "recoverSettlementLock",
         "setPolicy",
-        "setCircuitBreaker"
+        "setCircuitBreaker",
+        "createPolicyProfile",
+        "updatePolicyProfile",
+        "setActivePolicyProfile",
+        "deletePolicyProfile"
       ]
     },
     "agent_entrypoints": {
@@ -179,7 +184,7 @@
       "entrypoints": [
         "get_vault_state",
         "get_activity_history",
-        "sync_balance",
+        "evaluate_transfer",
         "propose_transfer"
       ]
     }
@@ -210,7 +215,15 @@
       "type": "update",
       "async": "async*"
     },
+    "syncAllBalances": {
+      "type": "update",
+      "async": "async*"
+    },
     "proposeTransfer": {
+      "type": "update",
+      "async": "async*"
+    },
+    "evaluateTransfer": {
       "type": "update",
       "async": "async*"
     },
@@ -234,6 +247,22 @@
       "type": "update",
       "async": "async*"
     },
+    "createPolicyProfile": {
+      "type": "update",
+      "async": false
+    },
+    "updatePolicyProfile": {
+      "type": "update",
+      "async": false
+    },
+    "setActivePolicyProfile": {
+      "type": "update",
+      "async": false
+    },
+    "deletePolicyProfile": {
+      "type": "update",
+      "async": false
+    },
     "setPolicy": {
       "type": "update",
       "async": false
@@ -245,13 +274,22 @@
   },
   "memory": {
     "agentvault": {
-      "version": 1,
+      "version": 2,
       "schemas": {
         "1": {
           "src": "memory/agentvault/v1.mo"
+        },
+        "2": {
+          "src": "memory/agentvault/v2.mo"
         }
       },
-      "migrations": []
+      "migrations": [
+        {
+          "from": 1,
+          "to": 2,
+          "src": "memory/agentvault/v1_to_v2.mo"
+        }
+      ]
     }
   }
 }

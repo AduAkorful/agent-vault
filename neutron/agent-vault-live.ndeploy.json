@@ -20,7 +20,7 @@
     },
     "packages": [
       {
-        "path": "apps/agent_vault/agent_vault.v0.1.0.neutron"
+        "path": "apps/agent_vault/agent_vault.v0.1.1.neutron"
       }
     ]
   }

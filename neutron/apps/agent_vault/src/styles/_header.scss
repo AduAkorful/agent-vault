@@ -1,0 +1,104 @@
+// Agent Vault — Top Header Banner (Pulseboard style)
+
+.pb-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 4px;
+  flex-wrap: wrap;
+  gap: 16px;
+
+  .pb-header-brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    user-select: none;
+
+    .pb-brand-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 42px;
+      height: 42px;
+      background: var(--pb-primary-subtle);
+      border: 1px solid var(--pb-primary-border);
+      border-radius: var(--pb-radius-lg);
+      color: var(--pb-primary);
+      flex-shrink: 0;
+    }
+
+    .pb-brand-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+
+      .pb-title-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+
+        h1 {
+          font-size: 20px;
+          font-weight: 700;
+          letter-spacing: -0.02em;
+          color: var(--pb-text-primary);
+          margin: 0;
+        }
+
+        .pb-ver-tag {
+          font-size: 11px;
+          font-weight: 600;
+          font-family: var(--pb-font-mono);
+          padding: 2px 6px;
+          background: var(--pb-subtle);
+          border: 1px solid var(--pb-border);
+          border-radius: var(--pb-radius-sm);
+          color: var(--pb-text-secondary);
+        }
+      }
+
+      .pb-subtitle-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--pb-text-muted);
+
+        .pb-status-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: var(--pb-success);
+          box-shadow: 0 0 6px var(--pb-success);
+          display: inline-block;
+        }
+      }
+    }
+  }
+
+  .pb-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+
+    .pb-canister-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--pb-card);
+      border: 1px solid var(--pb-border);
+      border-radius: var(--pb-radius-md);
+      padding: 6px 12px;
+      font-family: var(--pb-font-mono);
+      font-size: 12px;
+      color: var(--pb-text-secondary);
+
+      .pb-dot-live {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--pb-primary);
+      }
+    }
+  }
+}
