@@ -8,6 +8,7 @@ dist/
 test-results/
 
 # Local planning docs
+AGENTS.md
 plans/
 
 # Ignore upstream Neutron monorepo internals, but preserve Agent Vault app & E2E tests
