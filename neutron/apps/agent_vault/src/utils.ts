@@ -85,15 +85,26 @@ export function errorMessage(error: unknown): string {
 }
 
 export function unwrapOk<T>(result: unknown): T {
-  if (typeof result === "object" && result !== null && !Array.isArray(result)) {
+  if (Array.isArray(result) && result.length === 1) {
+    return unwrapOk<T>(result[0]);
+  }
+  if (typeof result === "object" && result !== null) {
     const rec = result as Record<string, unknown>;
     if ("ok" in rec) return rec.ok as T;
     if ("err" in rec) throw new Error(extractErrorMessage(rec.err));
     if ("Ok" in rec) return rec.Ok as T;
     if ("Err" in rec) throw new Error(extractErrorMessage(rec.Err));
-    throw new Error(`malformed result envelope: ${JSON.stringify(result)}`);
+    return result as T;
   }
   throw new Error(`malformed result envelope: ${JSON.stringify(result)}`);
+}
+
+export function safeUnwrap<T>(result: unknown): T | null {
+  try {
+    return unwrapOk<T>(result);
+  } catch {
+    return null;
+  }
 }
 
 export function extractErrorMessage(err: unknown, depth: number = 0): string {
@@ -404,23 +415,17 @@ export function isAllowedPair(from: string, to: string): boolean {
 
 export function parseFriendlyAmount(value: string, decimals: number | null): bigint {
   const trimmed = value.trim();
-   if (!trimmed || trimmed.startsWith("-") || /[eE]/.test(trimmed)) return 0n;
-   if (trimmed.length > 40) return 0n;
-  if (decimals === null || decimals === undefined || decimals < 0) {
-    try {
-      return toBigInt(trimmed);
-    } catch {
-      return 0n;
-    }
-  }
+  if (!trimmed || trimmed.startsWith("-") || /[eE]/.test(trimmed)) return 0n;
+  if (trimmed.length > 40) return 0n;
+  const safeDecimals = decimals === null || decimals === undefined || decimals < 0 ? 8 : decimals;
   const parts = trimmed.split(".");
   if (parts.length > 2) return 0n;
   const integerPart = parts[0] || "0";
   let fractionPart = parts[1] || "";
-  if (fractionPart.length > decimals) {
-    fractionPart = fractionPart.slice(0, decimals);
+  if (fractionPart.length > safeDecimals) {
+    fractionPart = fractionPart.slice(0, safeDecimals);
   } else {
-    fractionPart = fractionPart.padEnd(decimals, "0");
+    fractionPart = fractionPart.padEnd(safeDecimals, "0");
   }
   const combined = `${integerPart}${fractionPart}`.replace(/^0+/, "");
   if (combined === "" || !/^[0-9]+$/.test(combined)) return 0n;
@@ -623,7 +628,7 @@ export function exportAuditToCsv(audit: AuditEntry[], balances: Balance[] = []):
   const headers = ["ID", "Timestamp", "Action Type", "Tier", "Policy Error", "Ticket ID", "Note", "Settlement Status", "Block Index/AmountOut"];
   const rows = audit.map((entry) => {
     const details = parseActionDetails(entry.action, balances);
-    const receipt = parseReceipt(entry.settlement, balances);
+    const receipt = parseReceipt(entry.settlement);
     const tierName = getTier(entry.tier) === "autonomous" ? "Autonomous" : getTier(entry.tier) === "escalation" ? "Escalation" : "Forbidden";
     const settlementStatus = entry.settlement === null ? "unsettled" : receipt ? `settled (${receipt.type === "transfer" ? receipt.blockIndex : receipt.amountOut})` : "settled";
     return [
@@ -642,25 +647,50 @@ export function exportAuditToCsv(audit: AuditEntry[], balances: Balance[] = []):
   return allRows.map((row) => row.map(csvEscape).join(",")).join("\n");
 }
 
-export function downloadFile(filename: string, content: string, mimeType: string = "text/plain") {
-  const dataUrl = `data:${mimeType};charset=utf-8,${encodeURIComponent(content)}`;
+export function downloadFile(filename: string, content: string, mimeType: string = "text/plain"): boolean {
+  if (typeof window === "undefined" || !document) {
+    throw new Error("Download environment unavailable");
+  }
 
+  const payload = {
+    type: "neutron:download",
+    filename,
+    content,
+    mimeType,
+  };
+
+  let sent = false;
   try {
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-      if (document.body.contains(a)) document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }, 1000);
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(payload, "*");
+      sent = true;
+    }
   } catch {}
 
   try {
-    window.open(dataUrl, "_blank");
+    if (window.top && window.top !== window.parent && window.top !== window) {
+      window.top.postMessage(payload, "*");
+      sent = true;
+    }
   } catch {}
+
+  if (!sent) {
+    try {
+      const blob = new Blob([content], { type: mimeType || "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        if (document.body.contains(a)) document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 2000);
+    } catch (err) {
+      console.error("downloadFile error:", err);
+    }
+  }
+  return true;
 }

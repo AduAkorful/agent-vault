@@ -1,12 +1,13 @@
 import React, { useMemo, useState } from "react";
 import type { AuditEntry, Balance } from "../types";
 import { describeAction, formatRelativeTime, formatVaultError, getTier, isSettlementSuccess, parseActionDetails, parseReceipt, toBigInt } from "../utils";
-import { IconActivity, IconCheckCircle, IconClock, IconDownload, IconInbox } from "./Icons";
+import { IconActivity, IconCheckCircle, IconClock, IconInbox } from "./Icons";
 
 type Filter = "all" | "settled" | "escalation" | "forbidden";
 
-export function ActivityPanel({ audit, extraAudit, balances, onLoadMore, hasMore, onExportCsv }: { audit: AuditEntry[]; extraAudit: AuditEntry[]; balances: Balance[]; onLoadMore: () => Promise<void>; hasMore: boolean; onExportCsv: () => Promise<void> }) {
+export function ActivityPanel({ audit, extraAudit, balances, onLoadMore, hasMore }: { audit: AuditEntry[]; extraAudit: AuditEntry[]; balances: Balance[]; onLoadMore: () => Promise<void>; hasMore: boolean; onExportCsv?: () => Promise<void> }) {
   const [filter, setFilter] = useState<Filter>("all");
+
   const allAudit = useMemo(() => {
     const seen = new Set<string>();
     return [...extraAudit, ...audit].filter((entry) => {
@@ -24,7 +25,7 @@ export function ActivityPanel({ audit, extraAudit, balances, onLoadMore, hasMore
     return tierName === "forbidden" || summary.includes("reject") || summary.includes("breaker");
   }), [allAudit, filter, balances]);
 
-  return <div className="workspace-stack activity-workspace"><section className="workspace-heading"><div><span className="eyebrow">Activity</span><h1>Decision log</h1><p>Immutable audit entries for proposals, approvals, settlements, and failures.</p></div><span className="status-chip quiet"><IconActivity /> {audit.length} records</span></section><div className="activity-toolbar" role="tablist" aria-label="Activity filters">{(["all", "settled", "escalation", "forbidden"] as Filter[]).map((value) => <button type="button" role="tab" aria-selected={filter === value} className={`filter-button ${filter === value ? "active" : ""}`} key={value} onClick={() => setFilter(value)}>{value === "all" ? `All ${audit.length ? `(${audit.length})` : ""}` : value === "settled" ? "Settled" : value === "escalation" ? "Escalations" : "Forbidden"}</button>)}</div>{filtered.length === 0 ? <div className="empty-state empty-large"><div className="empty-icon"><IconClock /></div><strong>{audit.length ? "No matching records" : "No activity yet"}</strong><span>{audit.length ? "Choose another filter to inspect the full decision log." : "Agent proposals and owner decisions will appear here as live on-chain activity."}</span></div> : <div className="activity-table" role="list">{filtered.map((entry) => <ActivityEntry key={String(entry.id)} entry={entry} balances={balances} />)}</div>}{hasMore && <div className="activity-load-more"><button type="button" className="button button-secondary" onClick={() => void onLoadMore()}>Load more</button></div>}<div className="activity-export"><button type="button" className="button button-secondary" onClick={() => void onExportCsv()}><IconDownload /> Export CSV</button></div></div>;
+  return <div className="workspace-stack activity-workspace"><section className="workspace-heading"><div><span className="eyebrow">Activity</span><h1>Decision log</h1><p>Immutable audit entries for proposals, approvals, settlements, and failures.</p></div><span className="status-chip quiet"><IconActivity /> {audit.length} records</span></section><div className="activity-toolbar" role="tablist" aria-label="Activity filters">{(["all", "settled", "escalation", "forbidden"] as Filter[]).map((value) => <button type="button" role="tab" aria-selected={filter === value} className={`filter-button ${filter === value ? "active" : ""}`} key={value} onClick={() => setFilter(value)}>{value === "all" ? `All ${audit.length ? `(${audit.length})` : ""}` : value === "settled" ? "Settled" : value === "escalation" ? "Escalations" : "Forbidden"}</button>)}</div>{filtered.length === 0 ? <div className="empty-state empty-large"><div className="empty-icon"><IconClock /></div><strong>{audit.length ? "No matching records" : "No activity yet"}</strong><span>{audit.length ? "Choose another filter to inspect the full decision log." : "Agent proposals and owner decisions will appear here as live on-chain activity."}</span></div> : <div className="activity-table" role="list">{filtered.map((entry) => <ActivityEntry key={String(entry.id)} entry={entry} balances={balances} />)}</div>}{hasMore && <div className="activity-load-more"><button type="button" className="button button-secondary" onClick={() => void onLoadMore()}>Load more</button></div>}</div>;
 }
 
 function ActivityEntry({ entry, balances }: { entry: AuditEntry; balances: Balance[] }) {

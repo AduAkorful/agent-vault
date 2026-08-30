@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import type { VaultState, Balance } from "../types";
 import { formatAmount, parseFriendlyAmount, shortenPrincipal, toPrincipalText } from "../utils";
-import { IconInfo, IconSwap } from "./Icons";
+import { IconArrowDown, IconChevronDown, IconGear, IconInfo, IconSearch, IconSwap, IconX } from "./Icons";
 
 interface SwapFormProps {
   state: VaultState;
@@ -22,214 +22,419 @@ export function SwapForm({ state, busy, onPropose }: SwapFormProps) {
   const [fromToken, setFromToken] = useState("");
   const [toToken, setToToken] = useState("");
   const [amount, setAmount] = useState("");
-  const [slippage, setSlippage] = useState("1");
   const [minReturn, setMinReturn] = useState("");
+  const [slippage, setSlippage] = useState("1.0");
   const [expiryMinutes, setExpiryMinutes] = useState("5");
   const [reason, setReason] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+  const [tokenModalTarget, setTokenModalTarget] = useState<"from" | "to" | null>(null);
+  const [tokenSearch, setTokenSearch] = useState("");
 
   const dexes = state.policy.allowlists.dexes;
-  const dex = dexes[0] ?? "";
-  const dexLabel = dex ? `${shortenPrincipal(dex)} (ICPSwap)` : "No DEX configured";
+  const dex = dexes[0] ? toPrincipalText(dexes[0]) : "";
 
-  // Build pair options from allowlisted pairs
-  const pairOptions = state.policy.allowlists.pairs.map((pair) => ({
-    from: toPrincipalText(pair.from),
-    to: toPrincipalText(pair.to),
-  }));
-  const fromOptions = Array.from(new Set(pairOptions.map((p) => p.from)));
-  const toOptions = Array.from(
-    new Set(pairOptions.filter((p) => p.from === fromToken).map((p) => p.to)),
-  );
+  // Dynamic set of all available tokens (synced balances, policy pairs, and standard ledgers)
+  const allAvailableTokens = useMemo(() => {
+    const set = new Set<string>();
+    for (const b of state.balances) {
+      set.add(toPrincipalText(b.token.id));
+    }
+    for (const pair of state.policy.allowlists.pairs) {
+      set.add(toPrincipalText(pair.from));
+      set.add(toPrincipalText(pair.to));
+    }
+    set.add("ryjl3-tyaaa-aaaaa-aaaba-cai"); // ICP
+    set.add("mxzaz-hqaaa-aaaar-qaada-cai"); // ckBTC
+    set.add("xevnm-gaaaa-aaaar-qafnq-cai"); // ckUSDC
+    set.add("cngnf-vqaaa-aaaar-qag4q-cai"); // ckUSDT
+    return Array.from(set);
+  }, [state.balances, state.policy.allowlists.pairs]);
+
+  const actualFromToken = fromToken;
+  const actualToToken = toToken;
 
   const fromBalance = state.balances.find(
-    (b) => toPrincipalText(b.token.id) === fromToken,
+    (b) => toPrincipalText(b.token.id) === actualFromToken,
   );
   const fromDecimals = fromBalance?.token.decimals ?? null;
-  const fromSymbol = fromBalance?.token.symbol ?? shortenPrincipal(fromToken);
+  const fromSymbol = fromBalance?.token.symbol ?? (actualFromToken ? getTokenSymbol(actualFromToken, state.balances) : "Select token");
   const amountBase = parseFriendlyAmount(amount, fromDecimals);
 
   const toBalance = state.balances.find(
-    (b) => toPrincipalText(b.token.id) === toToken,
+    (b) => toPrincipalText(b.token.id) === actualToToken,
   );
   const toDecimals = toBalance?.token.decimals ?? null;
-  const toSymbol = toBalance?.token.symbol ?? shortenPrincipal(toToken);
+  const toSymbol = toBalance?.token.symbol ?? (actualToToken ? getTokenSymbol(actualToToken, state.balances) : "Select token");
   const minReturnBase = parseFriendlyAmount(minReturn, toDecimals);
+
+  const handleFlipDirection = () => {
+    const prevFrom = fromToken;
+    const prevTo = toToken;
+    const prevAmt = amount;
+    const prevMin = minReturn;
+
+    setFromToken(prevTo);
+    setToToken(prevFrom);
+    setAmount(prevMin);
+    setMinReturn(prevAmt);
+  };
+
+  const handleSetMax = () => {
+    if (fromBalance) {
+      setAmount(formatAmount(fromBalance.amount, fromDecimals));
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!fromToken || !toToken || !dex || !amount || !minReturn || !reason) return;
+    const finalFrom = actualFromToken || fromToken;
+    const finalTo = actualToToken || toToken;
+    const finalReason = reason.trim() || `Swap ${fromSymbol} for ${toSymbol}`;
+    if (!finalFrom || !finalTo || !dex || !amount || !minReturn) return;
     if (amountBase <= 0n) return;
     if (minReturnBase <= 0n) return;
     const slippageNum = Number(slippage);
     const expiryNum = Number(expiryMinutes);
-    if (Number.isNaN(slippageNum) || slippageNum <= 0 || slippageNum > 10000) return;
+    if (Number.isNaN(slippageNum) || slippageNum <= 0 || slippageNum > 100) return;
     if (Number.isNaN(expiryNum) || expiryNum < 1 || expiryNum > 60) return;
     const expiryNs = String(BigInt(Math.floor((Date.now() + Math.round(expiryNum) * 60_000)) * 1_000_000));
     await onPropose({
-      fromToken,
-      toToken,
+      fromToken: finalFrom,
+      toToken: finalTo,
       dex,
       amount: amountBase,
       minReturn: minReturnBase,
       slippageBps: BigInt(Math.round(slippageNum * 100)),
       quoteExpiresAt: expiryNs,
-      reason: reason || `Swap ${fromSymbol} for ${toSymbol}`,
+      reason: finalReason,
     });
   };
 
+  // Filter tokens for selection modal (supports search by symbol or raw principal)
+  const filteredModalTokens = useMemo(() => {
+    const query = tokenSearch.trim().toLowerCase();
+    const list = allAvailableTokens.filter((principal) => {
+      // Exclude token already selected on the opposite side
+      if (tokenModalTarget === "from" && principal === toToken) return false;
+      if (tokenModalTarget === "to" && principal === fromToken) return false;
+      const sym = getTokenSymbol(principal, state.balances).toLowerCase();
+      const p = principal.toLowerCase();
+      return !query || sym.includes(query) || p.includes(query);
+    });
+    // If the query is a valid principal string not in the list, allow adding it
+    if (query && query.includes("-") && !list.includes(query)) {
+      return [...list, query];
+    }
+    return list;
+  }, [allAvailableTokens, tokenSearch, state.balances, tokenModalTarget, fromToken, toToken]);
+
+  const selectModalToken = (principal: string) => {
+    if (tokenModalTarget === "from") {
+      setFromToken(principal);
+      if (toToken === principal) setToToken("");
+    } else if (tokenModalTarget === "to") {
+      setToToken(principal);
+    }
+    setTokenModalTarget(null);
+    setTokenSearch("");
+  };
+
+  const submitDisabled =
+    busy === "swap" ||
+    !dex ||
+    !actualFromToken ||
+    !actualToToken ||
+    !amount ||
+    amountBase <= 0n ||
+    !minReturn ||
+    minReturnBase <= 0n;
+
+  const submitLabel = useMemo(() => {
+    if (busy === "swap") return "Proposing swap…";
+    if (!dex) return "No DEX allowlisted";
+    if (!actualFromToken) return "Select a token";
+    if (!actualToToken) return "Select destination token";
+    if (!amount || amountBase <= 0n) return "Enter an amount";
+    if (!minReturn || minReturnBase <= 0n) return "Enter minimum return";
+    return "Propose Swap (Escalates to Approval)";
+  }, [busy, dex, actualFromToken, actualToToken, amount, amountBase, minReturn, minReturnBase]);
+
   return (
-    <div className="surface surface-swap">
-      <div className="surface-header">
-        <div>
-          <div className="surface-label">
-            <IconSwap /> Propose Token Swap
-          </div>
-          <p>
-            Swaps always escalate for owner approval. Provide your
-            minimum-return estimate; the backend validates it against a live DEX
-            quote at settlement time.
-          </p>
+    <div className="surface surface-swap uniswap-widget-container">
+      {/* Uniswap Header */}
+      <div className="uniswap-header">
+        <div className="uniswap-tabs">
+          <button type="button" className="uniswap-tab is-active">
+            Swap
+          </button>
+          <button type="button" className="uniswap-tab" onClick={() => setShowSettings(!showSettings)}>
+            Limit
+          </button>
+          <button type="button" className="uniswap-tab" onClick={() => setShowSettings(!showSettings)}>
+            Send
+          </button>
         </div>
+        <button
+          type="button"
+          className={`uniswap-gear-btn ${showSettings ? "is-open" : ""}`}
+          title="Swap settings"
+          onClick={() => setShowSettings(!showSettings)}
+        >
+          <IconGear />
+        </button>
       </div>
 
-      <form className="swap-form" onSubmit={handleSubmit}>
-        <div className="swap-field">
-          <label>From Token</label>
-          <select
-            value={fromToken}
-            disabled={busy === "swap"}
-            onChange={(e) => {
-              setFromToken(e.target.value);
-              setToToken("");
-            }}
-          >
-            <option value="">Select source token</option>
-            {fromOptions.map((principal) => (
-              <option key={principal} value={principal}>
-                {shortenPrincipal(principal)} — {balanceSymbol(principal, state.balances)}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {fromToken && (
-          <div className="swap-field">
-            <label>To Token</label>
-            <select
-              value={toToken}
-              disabled={busy === "swap"}
-              onChange={(e) => setToToken(e.target.value)}
-            >
-              <option value="">Select destination token</option>
-              {toOptions.map((principal) => (
-                <option key={principal} value={principal}>
-                  {shortenPrincipal(principal)}
-                </option>
-              ))}
-            </select>
+      {/* Uniswap Settings Popover Panel */}
+      {showSettings && (
+        <div className="uniswap-settings-popover">
+          <div className="uniswap-settings-header">
+            <strong>Swap settings</strong>
+            <button type="button" className="icon-button" onClick={() => setShowSettings(false)}>
+              <IconX />
+            </button>
           </div>
-        )}
+          <div className="uniswap-setting-item">
+            <label>Slippage tolerance (%)</label>
+            <div className="uniswap-preset-row">
+              {["0.1", "0.5", "1.0", "2.0"].map((val) => (
+                <button
+                  type="button"
+                  key={val}
+                  className={`uniswap-chip ${slippage === val ? "is-selected" : ""}`}
+                  onClick={() => setSlippage(val)}
+                >
+                  {val}%
+                </button>
+              ))}
+              <input
+                type="text"
+                className="uniswap-chip-input"
+                placeholder="Custom"
+                value={slippage}
+                onChange={(e) => setSlippage(e.target.value)}
+              />
+            </div>
+          </div>
 
-        <div className="swap-field">
-          <label>Amount ({fromSymbol})</label>
-          <input
-            type="text"
-            inputMode="decimal"
-            placeholder="e.g. 10.5"
-            value={amount}
-            disabled={busy === "swap"}
-            onChange={(e) => setAmount(e.target.value)}
-          />
-          {fromBalance && (
-            <small style={{ color: "var(--muted)" }}>
-              Balance: {formatAmount(fromBalance.amount, fromDecimals)} {fromSymbol}
-            </small>
-          )}
+          <div className="uniswap-setting-item">
+            <label>Quote expiry (minutes)</label>
+            <div className="uniswap-preset-row">
+              {["5", "10", "30"].map((val) => (
+                <button
+                  type="button"
+                  key={val}
+                  className={`uniswap-chip ${expiryMinutes === val ? "is-selected" : ""}`}
+                  onClick={() => setExpiryMinutes(val)}
+                >
+                  {val}m
+                </button>
+              ))}
+              <input
+                type="number"
+                min="1"
+                max="60"
+                className="uniswap-chip-input"
+                value={expiryMinutes}
+                onChange={(e) => setExpiryMinutes(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="uniswap-setting-item">
+            <label>Proposal rationale</label>
+            <input
+              type="text"
+              className="uniswap-setting-text"
+              placeholder="Why is this swap proposed?"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+            />
+          </div>
+        </div>
+      )}
+
+      <form className="uniswap-form" onSubmit={handleSubmit}>
+        {/* Sell / Source Token Card */}
+        <div className="uniswap-card uniswap-card-sell">
+          <div className="uniswap-card-top">
+            <span className="uniswap-card-label">Sell</span>
+            {fromBalance && (
+              <span className="uniswap-balance-info">
+                Balance: {formatAmount(fromBalance.amount, fromDecimals)}{" "}
+                <button type="button" className="uniswap-max-btn" onClick={handleSetMax}>
+                  MAX
+                </button>
+              </span>
+            )}
+          </div>
+          <div className="uniswap-input-row">
+            <input
+              type="text"
+              inputMode="decimal"
+              className="uniswap-amount-input"
+              placeholder="0"
+              value={amount}
+              disabled={busy === "swap"}
+              onChange={(e) => setAmount(e.target.value)}
+            />
+            <button
+              type="button"
+              className={`uniswap-token-pill ${!actualFromToken ? "is-unselected" : ""}`}
+              onClick={() => setTokenModalTarget("from")}
+            >
+              {actualFromToken ? (
+                <>
+                  <span className="uniswap-token-badge">{fromSymbol.slice(0, 2)}</span>
+                  <span className="uniswap-token-symbol">{fromSymbol}</span>
+                  <IconChevronDown />
+                </>
+              ) : (
+                <>
+                  <span>Select token</span>
+                  <IconChevronDown />
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
-        <div className="swap-field">
-          <label>Min Return ({toSymbol})</label>
-          <input
-            type="text"
-            inputMode="decimal"
-            placeholder="e.g. 9.5"
-            value={minReturn}
-            disabled={busy === "swap"}
-            onChange={(e) => setMinReturn(e.target.value)}
-          />
-          <small style={{ color: "var(--muted)" }}>
-            Estimated output after fees. Validated against live DEX quote at
-            approval time.
-          </small>
+        {/* Direction Flip Button */}
+        <div className="uniswap-flip-container">
+          <button
+            type="button"
+            className="uniswap-flip-btn"
+            title="Swap direction"
+            onClick={handleFlipDirection}
+          >
+            <IconArrowDown />
+          </button>
         </div>
 
-        <div className="swap-field">
-          <label>Slippage Tolerance (%)</label>
-          <input
-            type="number"
-            step="0.1"
-            min="0.01"
-            max="10"
-            value={slippage}
-            disabled={busy === "swap"}
-            onChange={(e) => setSlippage(e.target.value)}
-          />
-          <small style={{ color: "var(--muted)" }}>
-            Default 1%. The swap fails if the live quote deviates beyond this.
-          </small>
-        </div>
-
-        <div className="swap-field">
-          <label>Quote Expiry (minutes)</label>
-          <input
-            type="number"
-            min="1"
-            max="30"
-            value={expiryMinutes}
-            disabled={busy === "swap"}
-            onChange={(e) => setExpiryMinutes(e.target.value)}
-          />
-        </div>
-
-        <div className="swap-field">
-          <label>Reason</label>
-          <input
-            type="text"
-            placeholder="Why is this swap being proposed?"
-            value={reason}
-            disabled={busy === "swap"}
-            onChange={(e) => setReason(e.target.value)}
-          />
+        {/* Buy / Target Token Card */}
+        <div className="uniswap-card uniswap-card-buy">
+          <div className="uniswap-card-top">
+            <span className="uniswap-card-label">Buy (Min Return)</span>
+            <span className="uniswap-est-tag">Est. output after fees</span>
+          </div>
+          <div className="uniswap-input-row">
+            <input
+              type="text"
+              inputMode="decimal"
+              className="uniswap-amount-input"
+              placeholder="0"
+              value={minReturn}
+              disabled={busy === "swap"}
+              onChange={(e) => setMinReturn(e.target.value)}
+            />
+            <button
+              type="button"
+              className={`uniswap-token-pill ${!actualToToken ? "is-unselected" : ""}`}
+              onClick={() => setTokenModalTarget("to")}
+            >
+              {actualToToken ? (
+                <>
+                  <span className="uniswap-token-badge">{toSymbol.slice(0, 2)}</span>
+                  <span className="uniswap-token-symbol">{toSymbol}</span>
+                  <IconChevronDown />
+                </>
+              ) : (
+                <>
+                  <span>Select token</span>
+                  <IconChevronDown />
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
         {!dex && (
           <div className="swap-warning">
-            <IconInfo /> No DEX is allowlisted. Add one in the Policy tab before
-            proposing swaps.
+            <IconInfo /> No DEX is allowlisted. Add the ICPSwap factory in Policy → Approved counterparties.
           </div>
         )}
 
+        {/* Action Submit Button */}
         <button
           type="submit"
-          className="button button-primary swap-submit"
-          disabled={
-            busy === "swap" ||
-            !fromToken ||
-            !toToken ||
-            !dex ||
-            !amount ||
-            !minReturn ||
-            !reason
-          }
+          className="button uniswap-submit-btn"
+          disabled={submitDisabled}
+          onClick={(e) => void handleSubmit(e)}
         >
-          {busy === "swap" ? "Proposing…" : "Propose Swap (Escalates to Approval)"}
+          {submitLabel}
         </button>
       </form>
+
+      {/* Token Selection Modal */}
+      {tokenModalTarget !== null && (
+        <div className="uniswap-modal-backdrop" onClick={() => setTokenModalTarget(null)}>
+          <div className="uniswap-modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="uniswap-modal-header">
+              <h3>Select a token</h3>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setTokenModalTarget(null)}
+              >
+                <IconX />
+              </button>
+            </div>
+            <div className="uniswap-modal-search-wrapper">
+              <IconSearch />
+              <input
+                type="text"
+                className="uniswap-modal-search"
+                placeholder="Search name or principal"
+                value={tokenSearch}
+                onChange={(e) => setTokenSearch(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="uniswap-token-list">
+              {filteredModalTokens.length === 0 ? (
+                <div className="uniswap-no-tokens">
+                  No allowlisted token pairs match your search.
+                </div>
+              ) : (
+                filteredModalTokens.map((principal) => {
+                  const bal = state.balances.find((b) => toPrincipalText(b.token.id) === principal);
+                  const symbol = bal ? bal.token.symbol : shortenPrincipal(principal);
+                  return (
+                    <button
+                      type="button"
+                      key={principal}
+                      className="uniswap-token-option"
+                      onClick={() => selectModalToken(principal)}
+                    >
+                      <div className="uniswap-token-option-avatar">
+                        {symbol.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div className="uniswap-token-option-main">
+                        <strong>{symbol}</strong>
+                        <span>{shortenPrincipal(principal)}</span>
+                      </div>
+                      {bal && (
+                        <div className="uniswap-token-option-bal">
+                          {formatAmount(bal.amount, bal.token.decimals)}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function balanceSymbol(principal: string, balances: Balance[]): string {
+function getTokenSymbol(principal: string, balances: Balance[]): string {
   const bal = balances.find((b) => toPrincipalText(b.token.id) === principal);
-  return bal ? bal.token.symbol : shortenPrincipal(principal);
+  if (bal) return bal.token.symbol;
+  if (principal === "ryjl3-tyaaa-aaaaa-aaaba-cai") return "ICP";
+  if (principal === "mxzaz-hqaaa-aaaar-qaada-cai") return "ckBTC";
+  if (principal === "xevnm-gaaaa-aaaar-qafnq-cai") return "ckUSDC";
+  if (principal === "cngnf-vqaaa-aaaar-qag4q-cai") return "ckUSDT";
+  return shortenPrincipal(principal);
 }

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { AuditEntry, VaultState, Balance } from "../types";
-import { bytesToHex, describeAction, formatAmount, formatRelativeTime, getTier, parseActionDetails, parseReceipt, shortenPrincipal, toBigInt } from "../utils";
+import { bytesToHex, describeAction, formatAmount, formatRelativeTime, getTier, getTokenDecimals, parseActionDetails, parseReceipt, shortenPrincipal, toBigInt } from "../utils";
 import { IconActivity, IconAlertOctagon, IconArrowRight, IconCheck, IconClock, IconCopy, IconInbox, IconLayers, IconRefresh, IconShield, IconVault, IconZap } from "./Icons";
 import { CopyButton } from "./CopyButton";
 import { VelocityGauge } from "./VelocityGauge";
@@ -11,11 +11,16 @@ const STALENESS_MS = 300_000; // 5 minutes
 function useRecoveryCountdown(startedAt: bigint | null): number | null {
   const [remaining, setRemaining] = useState<number | null>(null);
   useEffect(() => {
-    if (startedAt === null) { setRemaining(null); return; }
+    if (startedAt === null || startedAt === undefined) { setRemaining(null); return; }
     const tick = () => {
-      const startedMs = Number(startedAt / 1_000_000n);
-      const left = STALENESS_MS - (Date.now() - startedMs);
-      setRemaining(left > 0 ? left : 0);
+      try {
+        const bi = typeof startedAt === "bigint" ? startedAt : BigInt(startedAt);
+        const startedMs = Number(bi / 1_000_000n);
+        const left = STALENESS_MS - (Date.now() - startedMs);
+        setRemaining(left > 0 ? left : 0);
+      } catch {
+        setRemaining(0);
+      }
     };
     tick();
     const id = setInterval(tick, 1000);
@@ -36,9 +41,15 @@ export function CommandCenter({ state, onNavigate, onRefresh, onSync, onSyncAll,
   const recent = useMemo(() => state.audit.slice().reverse().slice(0, 5), [state.audit]);
   const pending = state.pending.slice(0, 3);
   const breaker = state.policy.circuitBreaker;
-  const lock = state.settlementLock !== null && state.settlementLock !== undefined;
-  const lockStartedAt = lock ? (state.settlementLock as { startedAt: bigint }).startedAt : null;
-  const recoverRemaining = useRecoveryCountdown(lockStartedAt);
+  const rawLock = Array.isArray(state.settlementLock)
+    ? (state.settlementLock.length > 0 ? state.settlementLock[0] : null)
+    : state.settlementLock;
+  const lock = rawLock !== null && rawLock !== undefined && typeof rawLock === "object";
+  const lockStartedAt = lock && "startedAt" in (rawLock as object) ? toBigInt((rawLock as { startedAt: unknown }).startedAt) : null;
+  const lockStage = lock && "stage" in (rawLock as object) ? (rawLock as { stage?: string | null }).stage ?? null : null;
+  const isPreSubmitLock = lock && lockStage === null;
+  const countdown = useRecoveryCountdown(lockStartedAt);
+  const recoverRemaining = isPreSubmitLock ? 0 : countdown;
   const spendByToken = useMemo(() => {
     const map = new Map(state.spend.map((item) => [item.token, item]));
     for (const limit of state.policy.limits) {
@@ -83,12 +94,6 @@ export function CommandCenter({ state, onNavigate, onRefresh, onSync, onSyncAll,
       <div className="surface surface-activity"><div className="surface-header"><div><div className="surface-label"><IconActivity /> Recent activity</div><p>Latest proposals and settlement outcomes.</p></div><button type="button" className="text-button" onClick={() => onNavigate("activity")}>Open log <IconArrowRight /></button></div>{recent.length === 0 ? <EmptyState title="No activity yet" text="Agent proposals and owner decisions will appear here." /> : <div className="mini-list">{recent.map((item) => <ActivityRow key={String(item.id)} item={item} balances={state.balances} />)}</div>}</div>
       <div className="surface surface-approvals"><div className="surface-header"><div><div className="surface-label"><IconInbox /> Decisions waiting</div><p>Approval tickets require explicit owner action.</p></div><span className={`status-chip ${pending.length ? "warning" : "quiet"}`}>{state.pending.length} pending</span></div>{pending.length === 0 ? <EmptyState title="Nothing needs review" text="Escalated proposals will land here with their rationale and policy trigger." action="Open activity" onClick={() => onNavigate("activity")} /> : <div className="mini-list">{pending.map((ticket) => { const details = parseActionDetails(ticket.action, state.balances); return <button type="button" className="decision-row" key={String(ticket.id)} onClick={() => onNavigate("approvals")}><span className="decision-id">#{String(ticket.id)}</span><span className="decision-main"><strong>{details.type === "swap" ? "Swap" : "Transfer"}</strong><span>{details.reason || "Agent proposal"}</span></span><IconArrowRight /></button>; })}</div>}</div>
     </section>
-
-    <SwapForm
-      state={state}
-      busy={busy}
-      onPropose={onProposeSwap}
-    />
 
     <details className="reference-panel"><summary><span><IconLayers /> How Agent Vault decides</span><span className="muted">Three execution tiers</span></summary><div className="reference-grid"><ReferenceTier tone="live" label="Autonomous" text="Allowlisted transfers within fee-inclusive token budgets settle immediately." /><ReferenceTier tone="warning" label="Escalation" text="Over-budget transfers, unlisted recipients, and all non-zero swaps wait for approval." /><ReferenceTier tone="danger" label="Forbidden" text="Invalid amounts, missing configuration, and active breakers stop before funds move." /></div></details>
   </div>;

@@ -133,7 +133,74 @@
         },
         {
           "kind": "exact",
+          "principal": "cngnf-vqaaa-aaaar-qag4q-cai",
+          "method": "icrc1_supported_standards"
+        },
+        {
+          "kind": "exact",
+          "principal": "cngnf-vqaaa-aaaar-qag4q-cai",
+          "method": "icrc1_symbol"
+        },
+        {
+          "kind": "exact",
+          "principal": "cngnf-vqaaa-aaaar-qag4q-cai",
+          "method": "icrc1_decimals"
+        },
+        {
+          "kind": "exact",
+          "principal": "cngnf-vqaaa-aaaar-qag4q-cai",
+          "method": "icrc1_fee"
+        },
+        {
+          "kind": "exact",
+          "principal": "cngnf-vqaaa-aaaar-qag4q-cai",
+          "method": "icrc1_balance_of"
+        },
+        {
+          "kind": "exact",
+          "principal": "cngnf-vqaaa-aaaar-qag4q-cai",
+          "method": "icrc1_transfer"
+        },
+        {
+          "kind": "exact",
+          "principal": "cngnf-vqaaa-aaaar-qag4q-cai",
+          "method": "icrc2_approve"
+        },
+        {
+          "kind": "method",
+          "method": "icrc1_supported_standards"
+        },
+        {
+          "kind": "method",
+          "method": "icrc1_symbol"
+        },
+        {
+          "kind": "method",
+          "method": "icrc1_decimals"
+        },
+        {
+          "kind": "method",
+          "method": "icrc1_fee"
+        },
+        {
+          "kind": "method",
+          "method": "icrc1_balance_of"
+        },
+        {
+          "kind": "method",
+          "method": "icrc1_transfer"
+        },
+        {
+          "kind": "method",
+          "method": "icrc2_approve"
+        },
+        {
+          "kind": "exact",
           "principal": "4mmnk-kiaaa-aaaag-qbllq-cai",
+          "method": "getPool"
+        },
+        {
+          "kind": "method",
           "method": "getPool"
         },
         {

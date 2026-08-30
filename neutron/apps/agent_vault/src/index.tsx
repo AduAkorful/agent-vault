@@ -2,17 +2,18 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { loadTileContext, querySelf, updateSelf, type JsonValue } from "neutron-tools/app";
 import type { Ticket, TileContext, VaultState, PolicyDraft, AuditEntry } from "./types";
-import { errorMessage, exportAuditToCsv, shortenPrincipal, unwrapOk, makePolicyDraft, isPolicyDraftDirty, downloadFile } from "./utils";
-import { IconActivity, IconAlertOctagon, IconDownload, IconInbox, IconRefresh, IconSliders, IconVault } from "./components/Icons";
+import { errorMessage, exportAuditToCsv, extractErrorMessage, shortenPrincipal, unwrapOk, makePolicyDraft, isPolicyDraftDirty, downloadFile } from "./utils";
+import { IconActivity, IconAlertOctagon, IconDownload, IconInbox, IconRefresh, IconSliders, IconSwap, IconVault } from "./components/Icons";
 import { CommandCenter } from "./components/CommandCenter";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { PolicyPanel } from "./components/PolicyPanel";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { ApprovalWorkspace } from "./components/ApprovalWorkspace";
 import { SkillExport } from "./components/SkillExport";
+import { SwapWorkspace } from "./components/SwapWorkspace";
 import "./style.scss";
 
-type Workspace = "command" | "policy" | "activity" | "approvals" | "skill";
+type Workspace = "command" | "policy" | "swap" | "activity" | "approvals" | "skill";
 
 function Dashboard() {
   const [ctx, setCtx] = useState<TileContext | null>(null);
@@ -98,7 +99,7 @@ function Dashboard() {
 
   const handleUpdate = async (method: string, args: JsonValue[], key: string) => {
     setBusy(key); setBanner(null);
-    try { safeUnwrap(await updateSelf(method, args)); await refreshState(); setBanner({ kind: "success", text: "Policy saved on-chain." }); }
+    try { safeUnwrap(await updateSelf(method, args)); await updateSelf("syncAllBalances", [null]); await refreshState(); setBanner({ kind: "success", text: "Policy saved on-chain." }); }
     catch (error) { setBanner({ kind: "error", text: errorMessage(error) }); }
     finally { setBusy(null); }
   };
@@ -141,7 +142,7 @@ function Dashboard() {
   const handleRecoverLock = async () => {
     setBusy("recover"); setBanner(null);
     try {
-      unwrapOk(await updateSelf("recoverSettlementLock", [null]));
+      unwrapOk(await updateSelf("recoverSettlementLock", []));
       await refreshState();
       // Re-read state (the closure variable is stale after refreshState)
       const liveState = (await querySelf("getVaultState", [null])) as unknown as VaultState;
@@ -156,7 +157,7 @@ function Dashboard() {
           if (recoveryPollRef.current !== null) {
             void (async () => {
               try {
-                unwrapOk(await updateSelf("recoverSettlementLock", [null]));
+                unwrapOk(await updateSelf("recoverSettlementLock", []));
                 await refreshState();
               } catch (error) {
                 // Polling error — keep going; the useEffect cleanup handles lock clearance
@@ -217,16 +218,15 @@ function Dashboard() {
       let offset = 0;
       while (true) {
         const raw = await querySelf("getActivityHistory", [[String(100), String(offset)]]);
-        const page = safeUnwrap<AuditEntry[]>(raw) ?? [];
+        const page = safeUnwrap<AuditEntry[]>(raw) ?? (Array.isArray(raw) ? (raw as unknown as AuditEntry[]) : []);
         all = all.concat(page);
         if (page.length < 100) break;
         offset += 100;
       }
       const csv = exportAuditToCsv(all, state?.balances ?? []);
       downloadFile(`agent-vault-audit-${Date.now()}.csv`, csv, "text/csv");
-      setBanner({ kind: "success", text: "Audit log exported to CSV." });
     } catch (error) {
-      setBanner({ kind: "error", text: `Export failed: ${errorMessage(error)}` });
+      console.error("CSV Export Error:", error);
     } finally {
       setBusy(null);
     }
@@ -248,7 +248,7 @@ function Dashboard() {
   if (loading || !state) return <div className="console-app loading-screen"><div className="app-loading"><div className="loading-mark"><IconVault className="pb-spin" /></div><div className="loading-copy"><span className="eyebrow">Agent Vault</span><strong>Connecting to live custody</strong><span>Loading on-chain state through the Neutron kernel…</span></div></div></div>;
 
   const hasLock = state.settlementLock !== null;
-  const viewIndex = activeView === "command" ? 0 : activeView === "policy" ? 1 : activeView === "activity" ? 2 : activeView === "approvals" ? 3 : 4;
+  const viewIndex = activeView === "command" ? 0 : activeView === "policy" ? 1 : activeView === "swap" ? 2 : activeView === "activity" ? 3 : activeView === "approvals" ? 4 : 5;
 
   return <div className="console-app" data-context={ctx?.tileType ?? "dashboard"}>
     <div className="fluid-orb-1" />
@@ -263,6 +263,7 @@ function Dashboard() {
         <div className="active-indicator" style={{ transform: `translateY(${viewIndex * 47}px)` }} />
         <NavButton view="command" active={activeView} onSelect={handleSelectView} icon={<IconVault />} label="Command center" />
         <NavButton view="policy" active={activeView} onSelect={handleSelectView} icon={<IconSliders />} label="Policy" />
+        <NavButton view="swap" active={activeView} onSelect={handleSelectView} icon={<IconSwap />} label="Swap" />
         <NavButton view="activity" active={activeView} onSelect={handleSelectView} icon={<IconActivity />} label="Activity" badge={state.audit.length} />
         <NavButton view="approvals" active={activeView} onSelect={handleSelectView} icon={<IconInbox />} label="Approvals" badge={state.pending.length} />
         <NavButton view="skill" active={activeView} onSelect={handleSelectView} icon={<IconDownload />} label="Agent Skill" />
@@ -273,6 +274,7 @@ function Dashboard() {
         {banner && <div className={`notice-banner ${banner.kind}`} role={banner.kind === "error" ? "alert" : "status"}><span>{banner.text}</span><button type="button" className="icon-button" onClick={() => setBanner(null)} aria-label="Dismiss notification">×</button></div>}
         {activeView === "command" && <CommandCenter state={state} onNavigate={(view) => handleSelectView(view as Workspace)} onRefresh={refreshState} onSync={handleSyncToken} onSyncAll={handleSyncAll} onRecover={handleRecoverLock} onProposeSwap={handleProposeSwap} busy={busy} />}
         {activeView === "policy" && policyDraft && <PolicyPanel state={state} busy={busy} onUpdate={handleUpdate} draft={policyDraft} onChangeDraft={setPolicyDraft as unknown as React.Dispatch<React.SetStateAction<PolicyDraft>>} />}
+        {activeView === "swap" && <SwapWorkspace state={state} busy={busy} onProposeSwap={handleProposeSwap} />}
         {activeView === "activity" && <ActivityPanel audit={state.audit} extraAudit={extraAudit} balances={state.balances} onLoadMore={handleLoadMoreActivity} hasMore={hasMoreActivity} onExportCsv={handleExportCsv} />}
         {activeView === "approvals" && <ApprovalWorkspace tickets={state.pending} busy={busy} onApprove={handleApproveTicket} onReject={handleRejectTicket} balances={state.balances} />}
         {activeView === "skill" && <SkillExport state={state} />}
@@ -283,6 +285,7 @@ function Dashboard() {
       <div className="active-indicator-mobile" style={{ transform: `translateX(${viewIndex * 100}%)` }} />
       <NavButton view="command" active={activeView} onSelect={handleSelectView} icon={<IconVault />} label="Command" />
       <NavButton view="policy" active={activeView} onSelect={handleSelectView} icon={<IconSliders />} label="Policy" />
+      <NavButton view="swap" active={activeView} onSelect={handleSelectView} icon={<IconSwap />} label="Swap" />
       <NavButton view="activity" active={activeView} onSelect={handleSelectView} icon={<IconActivity />} label="Activity" badge={state.audit.length} />
       <NavButton view="approvals" active={activeView} onSelect={handleSelectView} icon={<IconInbox />} label="Approvals" badge={state.pending.length} />
       <NavButton view="skill" active={activeView} onSelect={handleSelectView} icon={<IconDownload />} label="Skill" />

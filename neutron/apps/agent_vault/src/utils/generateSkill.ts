@@ -313,11 +313,10 @@ A settlement lock is in place for: **${isTransferAction(lock.action) ? "Transfer
   }
 
   // --- Pending Approvals ---
-  if (state.pending.length > 0) {
-    lines.push(`## Pending Approvals (${state.pending.length})
-
-`);
-    for (const ticket of state.pending) {
+  const pending = state.pending ?? [];
+  if (pending.length > 0) {
+    lines.push(`## Pending Approvals (${pending.length})\n\n`);
+    for (const ticket of pending) {
       lines.push(
         `- Ticket #${ticket.id}: ${isTransferAction(ticket.action) ? "Transfer" : "Swap"} — ${md(formatVaultError(ticket.policyError) ?? "Pending review")}\n`,
       );

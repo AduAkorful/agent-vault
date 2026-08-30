@@ -940,9 +940,22 @@ module {
         };
 
         public func /*update*/syncAllBalances() : async* [BalanceResult] {
-            var results : [BalanceResult] = [];
+            var tokens : [Principal] = [];
             for (balance in mem.liveBalances.vals()) {
-                results := Array.concat(results, [await* sync(balance.token.id)]);
+                tokens := Array.concat(tokens, [balance.token.id]);
+            };
+            for (tl in mem.policy.limits.vals()) {
+                var exists = false;
+                for (t in tokens.vals()) {
+                    if (t == tl.token) exists := true;
+                };
+                if (not exists) {
+                    tokens := Array.concat(tokens, [tl.token]);
+                };
+            };
+            var results : [BalanceResult] = [];
+            for (token in tokens.vals()) {
+                results := Array.concat(results, [await* sync(token)]);
             };
             results;
         };
@@ -1120,9 +1133,6 @@ module {
             switch (mem.settlementLock) {
                 case null { mem.settlementInFlight := false; #ok(()) };
                 case (?lock) {
-                    // Only recoverable once demonstrably stale (5 min), so a genuinely
-                    // in-flight settlement is never disturbed mid-flight.
-                    if (Time.now() - lock.startedAt < 300_000_000_000) return #err(#SettlementLockNotStale);
                     switch (lock.intent) {
                         case null {
                             // No debit was ever submitted (a query trapped before the
@@ -1133,6 +1143,9 @@ module {
                             #ok(());
                         };
                         case (?intent) {
+                            // Only recoverable once demonstrably stale (5 min), so a genuinely
+                            // in-flight settlement is never disturbed mid-flight.
+                            if (Time.now() - lock.startedAt < 300_000_000_000) return #err(#SettlementLockNotStale);
                             switch (lock.action) {
                                 case (#transfer(p)) {
                                     // Both #Ok and #Duplicate mean the funds moved exactly
