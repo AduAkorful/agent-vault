@@ -2,17 +2,21 @@ import React, { useEffect, useState } from "react";
 import type { JsonValue } from "neutron-tools/app";
 import type { PolicyDraft, VaultState } from "../types";
 import { errorMessage, isPolicyNameValid, makePolicyDraft, policyArg, toBigInt, validatePolicyDraft } from "../utils";
-import { IconAlertOctagon, IconCheck, IconPlus, IconShield, IconTrash, IconZap } from "./Icons";
+import { IconAlertOctagon, IconCheck, IconClock, IconInbox, IconPlus, IconPencil, IconShield, IconTrash, IconZap } from "./Icons";
 import { AllowlistManager } from "./AllowlistManager";
 
-export function PolicyPanel({ state, busy, onUpdate, draft, onChangeDraft }: { state: VaultState; busy: string | null; onUpdate: (method: string, args: JsonValue[], key: string) => Promise<void>; draft: PolicyDraft; onChangeDraft: React.Dispatch<React.SetStateAction<PolicyDraft>> }) {
+export function PolicyPanel({ state, busy, onUpdate, onUpdateLabels, draft, onChangeDraft }: { state: VaultState; busy: string | null; onUpdate: (method: string, args: JsonValue[], key: string) => Promise<void>; onUpdateLabels: (labels: [string, string][]) => Promise<void>; draft: PolicyDraft; onChangeDraft: React.Dispatch<React.SetStateAction<PolicyDraft>> }) {
   const policy = state.policy;
   const activeProfile = state.policies.find((profile) => profile.id === state.activePolicyId);
   const [profileName, setProfileName] = useState(activeProfile?.name ?? "");
   const [draftError, setDraftError] = useState<string | null>(null);
+  const [labelsDraft, setLabelsDraft] = useState<[string, string][]>(state.recipientLabels ?? []);
+  const [newLabelPrincipal, setNewLabelPrincipal] = useState("");
+  const [newLabelText, setNewLabelText] = useState("");
   const failures = toBigInt(policy.consecutiveFailures);
   const threshold = toBigInt(policy.failureThreshold);
   useEffect(() => { setProfileName(activeProfile?.name ?? ""); }, [activeProfile?.id, activeProfile?.name]);
+  useEffect(() => { setLabelsDraft(state.recipientLabels ?? []); }, [state.recipientLabels]);
 
   const savePolicy = async () => {
     setDraftError(null);
@@ -52,6 +56,23 @@ export function PolicyPanel({ state, busy, onUpdate, draft, onChangeDraft }: { s
   const toggleCircuitBreaker = () => {
     void onUpdate("setCircuitBreaker", [!policy.circuitBreaker], "circuit-breaker");
   };
+  const addLabel = () => {
+    const principal = newLabelPrincipal.trim();
+    const text = newLabelText.trim();
+    if (!principal || !text) return;
+    setLabelsDraft((current) => {
+      const filtered = current.filter(([p]) => p !== principal);
+      return [...filtered, [principal, text]];
+    });
+    setNewLabelPrincipal("");
+    setNewLabelText("");
+  };
+  const removeLabel = (principal: string) => {
+    setLabelsDraft((current) => current.filter(([p]) => p !== principal));
+  };
+  const saveLabels = async () => {
+    await onUpdateLabels(labelsDraft);
+  };
 
   return <div className="workspace-stack policy-workspace">
      <section className="workspace-heading"><div><span className="eyebrow">Policy</span><h1>Guardrails</h1><p>Shape the boundaries for autonomous transfers and owner-approved swaps.</p></div><div className="policy-profile-controls"><label className="field"><span>Active profile</span><select value={String(state.activePolicyId)} onChange={(event) => void selectProfile(event.target.value)} disabled={busy === "policy"}>{state.policies.map((profile) => <option key={String(profile.id)} value={String(profile.id)}>{profile.name} · v{String(profile.revision)}</option>)}</select></label><label className="field"><span>Profile name</span><input value={profileName} onChange={(event) => setProfileName(event.target.value)} /></label><div className="button-row"><button type="button" className="button button-primary" disabled={busy === "policy"} onClick={() => void savePolicy()}><IconCheck /> {busy === "policy" ? "Saving…" : "Save profile"}</button><button type="button" className="button button-secondary" disabled={busy === "policy"} onClick={() => void saveAsNewProfile()}>Save as new</button><button type="button" className="button button-danger" disabled={busy === "policy" || state.policies.length <= 1} onClick={() => void deleteProfile()}><IconTrash /> Delete</button></div></div></section>
@@ -61,6 +82,90 @@ export function PolicyPanel({ state, busy, onUpdate, draft, onChangeDraft }: { s
       <details className="policy-section surface" open><summary><span><IconZap /> Token budgets</span><small>{draft.limits.length} configured</small></summary><div className="policy-section-body"><p className="section-copy">Use token values (e.g. 200). Decimals are converted automatically based on synced ledger metadata. Keep each transaction below hourly, and hourly below daily.</p>{draft.limits.length === 0 ? <div className="empty-state compact"><div className="empty-icon"><IconZap /></div><strong>No token budgets</strong><span>Every proposal will escalate until a token budget is configured.</span></div> : <div className="policy-limit-list">{draft.limits.map((entry, index) => <div key={`limit-row-${index}`} className="policy-limit-row"><div className="policy-limit-head"><label className="field field-wide"><span>Token principal</span><input type="text" placeholder="xevnm-gaaaa-aaaar-qafnq-cai" value={entry.token} onChange={(e) => updateLimit(index, "token", e.target.value)} /></label><button type="button" className="icon-button danger-icon" onClick={() => removeLimit(index)} title="Remove token budget" aria-label={`Remove token budget ${index + 1}`}><IconTrash /></button></div><div className="policy-limit-grid"><label className="field"><span>Per transaction</span><input value={entry.maxPerTx} onChange={(e) => updateLimit(index, "maxPerTx", e.target.value)} /></label><label className="field"><span>Hourly spend</span><input value={entry.maxHourlySpend} onChange={(e) => updateLimit(index, "maxHourlySpend", e.target.value)} /></label><label className="field"><span>Daily spend</span><input value={entry.maxDailySpend} onChange={(e) => updateLimit(index, "maxDailySpend", e.target.value)} /></label></div></div>)}</div>}<button type="button" className="button button-secondary" onClick={addLimit}><IconPlus /> Add token budget</button></div></details>
       <details className="policy-section surface" open><summary><span><IconShield /> Approved counterparties</span><small>Recipients, DEXs, pairs</small></summary><div className="policy-section-body"><p className="section-copy">Only allowlist principals and token pairs the agent may use. Values are checked before saving.</p><AllowlistManager recipientsRaw={draft.recipients} dexesRaw={draft.dexes} pairsRaw={draft.pairs} onChangeRecipients={(val) => onChangeDraft((c) => ({ ...c, recipients: val }))} onChangeDexes={(val) => onChangeDraft((c) => ({ ...c, dexes: val }))} onChangePairs={(val) => onChangeDraft((c) => ({ ...c, pairs: val }))} /></div></details>
       <details className="policy-section surface" open><summary><span><IconAlertOctagon /> Circuit breaker</span><small>{policy.circuitBreaker ? "Active" : "Standby"}</small></summary><div className="policy-section-body"><p className="section-copy">The breaker halts autonomous and owner-approved actions. Reset it only after reviewing the failure sequence and any settlement lock.</p><label className="field threshold-field"><span>Consecutive failures before trip</span><input inputMode="numeric" value={draft.failureThreshold} onChange={(e) => onChangeDraft((c) => ({ ...c, failureThreshold: e.target.value }))} /><small>{failures.toString()} failures recorded · threshold {threshold.toString()}</small></label><div className={`breaker-panel ${policy.circuitBreaker ? "tripped" : ""}`}><div><span className={`status-dot ${policy.circuitBreaker ? "danger" : "live"}`} /><strong>{policy.circuitBreaker ? "Emergency breaker active" : "Operations running"}</strong><p>{policy.circuitBreaker ? "All settlement actions are halted until the breaker is reset." : "The policy engine is accepting proposals under the configured guardrails."}</p></div><button type="button" className={`button ${policy.circuitBreaker ? "button-primary" : "button-danger"}`} disabled={busy === "circuit-breaker"} onClick={toggleCircuitBreaker}>{policy.circuitBreaker ? <><IconCheck /> Reset breaker</> : <><IconAlertOctagon /> Activate breaker</>}</button></div></div></details>
+      {/** Time-based conditions section */}
+      <details className="policy-section surface" open>
+        <summary><span><IconClock /> Time-based conditions</span><small>{draft.allowedHours.length} configured</small></summary>
+        <div className="policy-section-body">
+          <p className="section-copy">Restrict specific recipients to active hours (UTC) and weekdays. Transfers to a window-restricted recipient outside the allowed window escalate instead of settling autonomously. Hours use 0–23 (24-hour) format. Leave the weekday row empty to allow every day of the week.</p>
+          {draft.allowedHours.length === 0
+            ? <div className="empty-state compact"><div className="empty-icon"><IconClock /></div><strong>No time restrictions</strong><span>All allowlisted recipients can transact at any time.</span></div>
+            : <div className="time-window-list">
+              {draft.allowedHours.map((entry, index) => (
+                <div key={`hour-row-${index}`} className="time-window-row">
+                  <label className="field field-narrow"><span>Recipient</span><input type="text" placeholder="Principal" value={entry[0]} onChange={(e) => onChangeDraft((c) => ({ ...c, allowedHours: c.allowedHours.map((w, i) => i === index ? [e.target.value, w[1]] : w) }))} /></label>
+                  <label className="field field-narrow"><span>Start (UTC)</span><input inputMode="numeric" min={0} max={23} type="number" value={entry[1].start} onChange={(e) => onChangeDraft((c) => ({ ...c, allowedHours: c.allowedHours.map((w, i) => i === index ? [w[0], { ...w[1], start: Number(e.target.value) }] : w) }))} /></label>
+                  <label className="field field-narrow"><span>End (UTC)</span><input inputMode="numeric" min={0} max={23} type="number" value={entry[1].end} onChange={(e) => onChangeDraft((c) => ({ ...c, allowedHours: c.allowedHours.map((w, i) => i === index ? [w[0], { ...w[1], end: Number(e.target.value) }] : w) }))} /></label>
+                  <div className="field field-wide weekday-field">
+                    <span>Weekdays (Sun=0, leave empty for all)</span>
+                    <div className="weekday-row">
+                      {(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const).map((label, dayIndex) => {
+                        const checked = (entry[1].days ?? []).includes(dayIndex);
+                        return (
+                          <label key={label} className={`weekday-chip ${checked ? "is-checked" : ""}`}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                const next = e.target.checked
+                                  ? Array.from(new Set([...(entry[1].days ?? []), dayIndex])).sort((a, b) => a - b)
+                                  : (entry[1].days ?? []).filter((d) => d !== dayIndex);
+                                onChangeDraft((c) => ({
+                                  ...c,
+                                  allowedHours: c.allowedHours.map((w, i) => i === index ? [w[0], { ...w[1], days: next }] : w),
+                                }));
+                              }}
+                            />
+                            {label}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <button type="button" className="icon-button danger-icon" onClick={() => onChangeDraft((c) => ({ ...c, allowedHours: c.allowedHours.filter((_, i) => i !== index) }))} title="Remove time restriction" aria-label={`Remove time restriction ${index + 1}`}><IconTrash /></button>
+                </div>
+              ))}
+            </div>
+          }
+          <button type="button" className="button button-secondary" onClick={() => onChangeDraft((c) => ({ ...c, allowedHours: [...c.allowedHours, ["", { start: 9, end: 17, days: [] }]] }))}><IconPlus /> Add time window</button>
+        </div>
+      </details>
+
+      {/** Per-token recipients section */}
+      <details className="policy-section surface" open>
+        <summary><span><IconInbox /> Per-token recipients</span><small>{draft.tokenRecipients.length} configured</small></summary>
+        <div className="policy-section-body">
+          <p className="section-copy">Add token-specific recipient allowlists. These are additive with the global recipients list above — a recipient is permitted for a token if it appears in either list. Useful when a payment address should only receive a specific stablecoin.</p>
+          {draft.tokenRecipients.length === 0
+            ? <div className="empty-state compact"><div className="empty-icon"><IconInbox /></div><strong>No per-token restrictions</strong><span>Global recipient allowlists apply to all tokens.</span></div>
+            : <div className="token-recipient-list">
+              {draft.tokenRecipients.map((entry, index) => (
+                <div key={`token-recipient-row-${index}`} className="token-recipient-row">
+                <label className="field field-wide"><span>Token principal</span><input type="text" placeholder="xevnm-gaaaa-aaaar-qafnq-cai" value={entry[0]} onChange={(e) => onChangeDraft((c) => ({ ...c, tokenRecipients: c.tokenRecipients.map((tr, i) => i === index ? [e.target.value, tr[1]] : tr) }))} /></label>
+                  <AllowlistManager
+                    recipientsRaw={(entry[1] ?? []).join("\n")}
+                    dexesRaw=""
+                    pairsRaw=""
+                    onChangeRecipients={(val) => onChangeDraft((c) => ({ ...c, tokenRecipients: c.tokenRecipients.map((tr, i) => i === index ? [tr[0], val.split("\n")] : tr) }))}
+                    onChangeDexes={() => undefined}
+                    onChangePairs={() => undefined}
+                  />
+                </div>
+              ))}
+            </div>
+          }
+          <button type="button" className="button button-secondary" onClick={() => onChangeDraft((c) => ({ ...c, tokenRecipients: [...c.tokenRecipients, ["", []]] }))}><IconPlus /> Add per-token recipient list</button>
+        </div>
+      </details>
+
+      {/** Approval timelock section */}
+      <details className="policy-section surface" open>
+        <summary><span><IconClock /> Approval timelock</span><small>{draft.approvalTimelock || "0"}s</small></summary>
+        <div className="policy-section-body">
+          <p className="section-copy">When set, owner-approved tickets wait before the settlement executes. During the delay the owner can cancel the proposal. Set to 0 for immediate settlement on approval.</p>
+          <label className="field"><span>Timelock duration (seconds)</span><input inputMode="numeric" type="number" value={draft.approvalTimelock || "0"} onChange={(e) => onChangeDraft((c) => ({ ...c, approvalTimelock: e.target.value }))} min={0} /><small>e.g. 86400 = 24 hours</small></label>
+        </div>
+      </details>
+      <details className="policy-section surface" open><summary><span>Recipient labels</span><small>{labelsDraft.length} configured</small></summary><div className="policy-section-body"><p className="section-copy">Assign human-readable aliases to recipient principals so approvals, the audit feed, and swap proposals read clearly.</p>{labelsDraft.length === 0 ? <div className="empty-state compact"><div className="empty-icon"><IconPencil /></div><strong>No recipient labels</strong><span>Recipients will appear as principals until you assign labels.</span></div> : <div className="label-list">{labelsDraft.map(([principal, text]) => <div key={principal} className="label-row"><span className="label-value">{text}</span><span className="label-principal">{principal}</span><button type="button" className="icon-button danger-icon" onClick={() => removeLabel(principal)} title={`Remove label for ${principal}`} aria-label={`Remove label for ${principal}`}><IconTrash /></button></div>)}</div>}<div className="label-input-row"><input type="text" placeholder="Recipient principal" value={newLabelPrincipal} onChange={(e) => setNewLabelPrincipal(e.target.value)} disabled={busy === "labels"} /><input type="text" placeholder="Alias (e.g. Treasury wallet)" value={newLabelText} onChange={(e) => setNewLabelText(e.target.value)} disabled={busy === "labels"} /><button type="button" className="button button-secondary" disabled={busy === "labels" || !newLabelPrincipal.trim() || !newLabelText.trim()} onClick={() => addLabel()}><IconPlus /> Add</button></div><button type="button" className="button button-primary" disabled={busy === "labels" || labelsDraft.length === 0} onClick={() => void saveLabels()}><IconCheck /> {busy === "labels" ? "Saving…" : "Save labels"}</button></div></details>
     </div>
   </div>;
 }

@@ -1,20 +1,29 @@
 import React, { useEffect, useState } from "react";
 import type { Ticket, Balance } from "../types";
-import { formatAmount, formatRelativeTime, formatVaultError, getTokenDecimals, parseActionDetails, shortenPrincipal, toBigInt } from "../utils";
+import { formatAmount, formatAmountSafe, formatRelativeTime, formatVaultError, getTokenDecimals, parseActionDetails, resolveRecipientLabel, shortenPrincipal, toBigInt } from "../utils";
 import { IconAlertOctagon, IconArrowRight, IconCheck, IconClock, IconInbox, IconMessageSquare, IconShield, IconTrash, IconX } from "./Icons";
+
+const isTimelocked = (ticket: Ticket) => ticket.timelockUntil !== null;
+const isTimelockExpired = (ticket: Ticket) => ticket.timelockUntil !== null && Date.now() >= Number(ticket.timelockUntil) / 1_000_000;
 
 export function ApprovalWorkspace({
   tickets,
   busy,
   onApprove,
   onReject,
+  onExecuteTimelocked,
+  onCancelTimelocked,
   balances,
+  labels,
 }: {
   tickets: Ticket[];
   busy: string | null;
   onApprove: (ticket: Ticket) => Promise<void>;
   onReject: (ticket: Ticket, reason: string) => Promise<void>;
+  onExecuteTimelocked: (ticket: Ticket) => Promise<void>;
+  onCancelTimelocked: (ticket: Ticket, reason: string) => Promise<void>;
   balances: Balance[];
+  labels: [string, string][];
 }) {
   const [selected, setSelected] = useState<Ticket | null>(tickets[0] ?? null);
   const [selectedBulk, setSelectedBulk] = useState<Set<bigint>>(new Set());
@@ -146,7 +155,7 @@ export function ApprovalWorkspace({
 
             <div className="approval-queue">
               {tickets.map((ticket) => {
-                const details = parseActionDetails(ticket.action, balances);
+                const details = parseActionDetails(ticket.action, balances, labels);
                 const isSelected = selected?.id === ticket.id;
                 return (
                   <button
@@ -174,6 +183,11 @@ export function ApprovalWorkspace({
                         <span className={`status-chip ${details.type === "swap" ? "warning" : "live"}`}>
                           {details.type === "swap" ? "Swap" : "Transfer"}
                         </span>
+                        {isTimelocked(ticket) && (
+                          <span className={`status-chip ${isTimelockExpired(ticket) ? "quiet" : "danger"}`}>
+                            <IconClock /> {isTimelockExpired(ticket) ? "Timelock expired" : "Timelocked"}
+                          </span>
+                        )}
                         <time className="approval-time">{formatRelativeTime(toBigInt(ticket.createdAt))}</time>
                       </div>
                       <strong className="approval-title">{details.reason || details.summary}</strong>
@@ -195,7 +209,10 @@ export function ApprovalWorkspace({
               onClose={() => setSelected(null)}
               onApprove={() => void onApprove(selected)}
               onReject={(reason: string) => void onReject(selected, reason)}
+              onExecuteTimelocked={() => void onExecuteTimelocked(selected)}
+              onCancelTimelocked={(reason: string) => void onCancelTimelocked(selected, reason)}
               balances={balances}
+              labels={labels}
             />
           )}
         </div>
@@ -210,18 +227,26 @@ function ReviewDrawer({
   onClose,
   onApprove,
   onReject,
+  onExecuteTimelocked,
+  onCancelTimelocked,
   balances,
+  labels,
 }: {
   ticket: Ticket;
   busy: boolean;
   onClose: () => void;
   onApprove: () => void;
   onReject: (reason: string) => void;
+  onExecuteTimelocked: () => void;
+  onCancelTimelocked: (reason: string) => void;
   balances: Balance[];
+  labels: [string, string][];
 }) {
   const [showReject, setShowReject] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
-  const details = parseActionDetails(ticket.action, balances);
+  const [showCancel, setShowCancel] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+  const details = parseActionDetails(ticket.action, balances, labels);
 
   return (
     <aside className="review-drawer">
@@ -268,9 +293,11 @@ function ReviewDrawer({
                 <div>
                   <span>Fee</span>
                   <code>
-                    {formatAmount(
+                    {formatAmountSafe(
                       ticket.evaluation.fee,
-                      getTokenDecimals(details.token || details.fromToken || "", balances)
+                      getTokenDecimals(details.token || details.fromToken || "", balances),
+                      details.token || details.fromToken,
+                      "evaluation.fee"
                     )}
                   </code>
                 </div>
@@ -279,14 +306,18 @@ function ReviewDrawer({
                 <div>
                   <span>Hourly spend</span>
                   <code>
-                    {formatAmount(
+                    {formatAmountSafe(
                       ticket.evaluation.hourlyBefore,
-                      getTokenDecimals(details.token || details.fromToken || "", balances)
+                      getTokenDecimals(details.token || details.fromToken || "", balances),
+                      details.token || details.fromToken,
+                      "evaluation.hourlyBefore"
                     )}{" "}
                     →{" "}
-                    {formatAmount(
+                    {formatAmountSafe(
                       ticket.evaluation.hourlyAfter,
-                      getTokenDecimals(details.token || details.fromToken || "", balances)
+                      getTokenDecimals(details.token || details.fromToken || "", balances),
+                      details.token || details.fromToken,
+                      "evaluation.hourlyAfter"
                     )}
                   </code>
                 </div>
@@ -295,14 +326,18 @@ function ReviewDrawer({
                 <div>
                   <span>Daily spend</span>
                   <code>
-                    {formatAmount(
+                    {formatAmountSafe(
                       ticket.evaluation.dailyBefore,
-                      getTokenDecimals(details.token || details.fromToken || "", balances)
+                      getTokenDecimals(details.token || details.fromToken || "", balances),
+                      details.token || details.fromToken,
+                      "evaluation.dailyBefore"
                     )}{" "}
                     →{" "}
-                    {formatAmount(
+                    {formatAmountSafe(
                       ticket.evaluation.dailyAfter,
-                      getTokenDecimals(details.token || details.fromToken || "", balances)
+                      getTokenDecimals(details.token || details.fromToken || "", balances),
+                      details.token || details.fromToken,
+                      "evaluation.dailyAfter"
                     )}
                   </code>
                 </div>
@@ -348,7 +383,9 @@ function ReviewDrawer({
             {details.recipient && (
               <div>
                 <span>Recipient</span>
-                <code title={details.recipient}>{shortenPrincipal(details.recipient)}</code>
+                <code title={details.recipient}>
+                  {resolveRecipientLabel(details.recipient, labels) || shortenPrincipal(details.recipient)}
+                </code>
               </div>
             )}
             {details.fromToken && (
@@ -373,62 +410,155 @@ function ReviewDrawer({
         <div className="review-note">
           Approval authorizes the exact staged intent shown here. Swaps never settle autonomously.
         </div>
+
+        {isTimelocked(ticket) && (
+          <div className="review-section">
+            <span className="section-label">
+              <IconClock /> Approval timelock
+            </span>
+            <div className="parameter-list">
+              <div>
+                <span>Status</span>
+                <strong>{isTimelockExpired(ticket) ? "Ready to execute" : "Deferred — settling on expiry"}</strong>
+              </div>
+              <div>
+                <span>Expires</span>
+                <code>{ticket.timelockUntil ? formatRelativeTime(toBigInt(ticket.timelockUntil)) : "—"}</code>
+              </div>
+            </div>
+            <p className="section-help">
+              {isTimelockExpired(ticket)
+                ? "The timelock has elapsed. You can execute the settlement now or cancel it."
+                : "Settlement is deferred until the timelock expires. You may cancel this ticket at any time before execution."}
+            </p>
+          </div>
+        )}
       </div>
 
-      <div className="drawer-actions">
-        {showReject ? (
-          <div className="reject-confirm">
-            <textarea
-              className="reject-reason-text"
-              placeholder="Rejection reason (optional)..."
-              value={rejectReason}
-              onChange={(e) => setRejectReason(e.target.value)}
-              disabled={busy}
-              autoFocus
-            />
-            <div className="reject-confirm-buttons">
-              <button
-                type="button"
-                className="button button-secondary button-sm"
-                onClick={() => setShowReject(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="button button-danger button-sm"
+          <div className="drawer-actions">
+          {showReject ? (
+            <div className="reject-confirm">
+              <textarea
+                className="reject-reason-text"
+                placeholder="Rejection reason (optional)..."
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
                 disabled={busy}
-                onClick={() => {
-                  void onReject(rejectReason.trim() || "Owner rejected");
-                  setShowReject(false);
-                  setRejectReason("");
-                }}
-              >
-                <IconTrash /> Confirm
-              </button>
+                autoFocus
+              />
+              <div className="reject-confirm-buttons">
+                <button
+                  type="button"
+                  className="button button-secondary button-sm"
+                  onClick={() => setShowReject(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="button button-danger button-sm"
+                  disabled={busy}
+                  onClick={() => {
+                    void onReject(rejectReason.trim() || "Owner rejected");
+                    setShowReject(false);
+                    setRejectReason("");
+                  }}
+                >
+                  <IconTrash /> Confirm
+                </button>
+              </div>
             </div>
-          </div>
-        ) : (
-          <button
-            type="button"
-            className="button button-secondary"
-            disabled={busy}
-            onClick={() => setShowReject(true)}
-          >
-            <IconTrash /> Reject
-          </button>
-        )}
-        {!showReject && (
-          <button
-            type="button"
-            className="button button-primary"
-            disabled={busy}
-            onClick={onApprove}
-          >
-            <IconCheck /> {busy ? "Settling…" : "Approve & settle"}
-          </button>
-        )}
-      </div>
+          ) : showCancel ? (
+            <div className="reject-confirm">
+              <textarea
+                className="reject-reason-text"
+                placeholder="Cancellation reason (optional)..."
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                disabled={busy}
+                autoFocus
+              />
+              <div className="reject-confirm-buttons">
+                <button
+                  type="button"
+                  className="button button-secondary button-sm"
+                  onClick={() => setShowCancel(false)}
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  className="button button-danger button-sm"
+                  disabled={busy}
+                  onClick={() => {
+                    void onCancelTimelocked(cancelReason.trim() || "Owner canceled timelock");
+                    setShowCancel(false);
+                    setCancelReason("");
+                  }}
+                >
+                  <IconTrash /> Confirm
+                </button>
+              </div>
+            </div>
+          ) : isTimelocked(ticket) && !isTimelockExpired(ticket) ? (
+            <>
+              <button
+                type="button"
+                className="button button-secondary"
+                disabled={busy}
+                onClick={() => setShowCancel(true)}
+              >
+                <IconTrash /> Cancel timelock
+              </button>
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={true}
+                title="Timelock has not yet expired"
+              >
+                <IconClock /> {busy ? "Executing…" : "Execute on expiry"}
+              </button>
+            </>
+          ) : isTimelocked(ticket) && isTimelockExpired(ticket) ? (
+            <>
+              <button
+                type="button"
+                className="button button-secondary"
+                disabled={busy}
+                onClick={() => setShowCancel(true)}
+              >
+                <IconTrash /> Cancel
+              </button>
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={busy}
+                onClick={() => { void onExecuteTimelocked(); setShowCancel(false); }}
+              >
+                <IconCheck /> Execute settlement
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="button button-secondary"
+                disabled={busy}
+                onClick={() => setShowReject(true)}
+              >
+                <IconTrash /> Reject
+              </button>
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={busy}
+                onClick={onApprove}
+              >
+                <IconCheck /> {busy ? "Settling…" : "Approve & settle"}
+              </button>
+            </>
+          )}
+        </div>
     </aside>
   );
 }

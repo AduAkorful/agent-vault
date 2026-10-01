@@ -17,6 +17,7 @@ export interface Balance {
   syncedAt: bigint;
 }
 
+
 export interface TokenLimits {
   maxPerTx: bigint;
   maxHourlySpend: bigint;
@@ -28,10 +29,13 @@ export interface TokenLimit {
   limits: TokenLimits;
 }
 
+export interface TimeWindow { start: number; end: number; days: number[] }
+
 export interface Allowlists {
   recipients: string[];
   dexes: string[];
   pairs: { from: string; to: string }[];
+  tokenRecipients: [string, string[]][];
 }
 
 export interface Policy {
@@ -40,6 +44,8 @@ export interface Policy {
   circuitBreaker: boolean;
   failureThreshold: bigint;
   consecutiveFailures: bigint;
+  allowedHours: [string, TimeWindow][];
+  approvalTimelock: bigint;
 }
 
 export interface PolicyProfile {
@@ -81,6 +87,7 @@ export interface Ticket {
   policyError: JsonValue;
   evaluation: PolicyEvaluation | null;
   status: JsonValue;
+  timelockUntil: bigint | null;
 }
 
 export interface TokenSpend {
@@ -101,6 +108,21 @@ export interface VaultState {
   settlementLock: { action: JsonValue; startedAt: bigint; profile: { id: bigint; name: string; revision: bigint } | null; stage: string | null } | null;
   dexConfig: JsonValue;
   depositAccount: { owner: string; subaccount: number[] };
+  recipientLabels: [string, string][];
+}
+
+export interface TokenValuation {
+  token: string;
+  balance: bigint;
+  usdValue: bigint;
+  // Decimals of `usdValue`: the decimals of the anchor ledger the backend
+  // quoted against (ckUSDC today). Read live via `icrc1_decimals` — never
+  // hardcoded. `0` means the decimals could not be read; the dashboard
+  // renders such rows as "price unavailable" rather than guessing.
+  usdDecimals: number;
+  // Decimals of the input token's `balance` so the dashboard can render
+  // it in the same units the agent used to compute it.
+  balanceDecimals: number;
 }
 
 export interface PolicyDraft {
@@ -108,7 +130,10 @@ export interface PolicyDraft {
   recipients: string;
   dexes: string;
   pairs: string;
+  tokenRecipients: [string, string[]][];
+  allowedHours: [string, TimeWindow][];
   failureThreshold: string;
+  approvalTimelock: string;
 }
 
 export interface TileContext {

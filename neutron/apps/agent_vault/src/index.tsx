@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { loadTileContext, querySelf, updateSelf, type JsonValue } from "neutron-tools/app";
-import type { Ticket, TileContext, VaultState, PolicyDraft, AuditEntry } from "./types";
+import type { Ticket, TileContext, VaultState, PolicyDraft, AuditEntry, TokenValuation } from "./types";
 import { errorMessage, exportAuditToCsv, extractErrorMessage, shortenPrincipal, unwrapOk, makePolicyDraft, isPolicyDraftDirty, downloadFile } from "./utils";
 import { IconActivity, IconAlertOctagon, IconDownload, IconInbox, IconRefresh, IconSliders, IconSwap, IconVault } from "./components/Icons";
 import { CommandCenter } from "./components/CommandCenter";
@@ -27,6 +27,8 @@ function Dashboard() {
   const [auditOffset, setAuditOffset] = useState(0);
   const [extraAudit, setExtraAudit] = useState<AuditEntry[]>([]);
   const [hasMoreActivity, setHasMoreActivity] = useState(false);
+  const [portfolioValues, setPortfolioValues] = useState<TokenValuation[] | null>(null);
+  const [syncPrices, setSyncPrices] = useState(false);
   const recoveryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Clean up recovery polling when the lock clears
@@ -66,6 +68,12 @@ function Dashboard() {
         return makePolicyDraft(liveState.policy, liveState.balances);
       });
       if (!quiet) setBanner({ kind: "success", text: "On-chain state refreshed." });
+      try {
+        const raw = (await updateSelf("getPortfolioValue", [null])) as unknown as TokenValuation[];
+        setPortfolioValues(raw ?? []);
+      } catch {
+        // USD pricing depends on live pool availability — don't block on it.
+      }
     }
     catch (error) {
       if (!quiet) setBanner({ kind: "error", text: `Could not refresh vault state: ${errorMessage(error)}` });
@@ -129,7 +137,18 @@ function Dashboard() {
   };
   const handleApproveTicket = async (ticket: Ticket) => {
     setBusy(`ticket-${ticket.id}`); setBanner(null);
-    try { safeUnwrap(await updateSelf("approveTicket", [String(ticket.id)])); await refreshState(); setBanner({ kind: "success", text: `Ticket #${ticket.id} approved and settled.` }); }
+    try {
+      const result = await updateSelf("approveTicket", [String(ticket.id)]);
+      safeUnwrap(result);
+      await refreshState();
+      const liveState = (await querySelf("getVaultState", [null])) as unknown as VaultState;
+      const liveTicket = liveState.pending.find((t) => t.id === ticket.id);
+      if (liveTicket?.timelockUntil != null) {
+        setBanner({ kind: "info", text: `Ticket #${ticket.id} approved. Settlement deferred until timelock expires.` });
+      } else {
+        setBanner({ kind: "success", text: `Ticket #${ticket.id} approved and settled.` });
+      }
+    }
     catch (error) { setBanner({ kind: "error", text: `Ticket #${ticket.id} was not settled: ${errorMessage(error)}` }); }
     finally { setBusy(null); }
   };
@@ -137,6 +156,18 @@ function Dashboard() {
     setBusy(`ticket-${ticket.id}`); setBanner(null);
     try { safeUnwrap(await updateSelf("rejectTicket", [[String(ticket.id), reason]])); await refreshState(); setBanner({ kind: "info", text: `Ticket #${ticket.id} rejected.` }); }
     catch (error) { setBanner({ kind: "error", text: `Ticket #${ticket.id} could not be rejected: ${errorMessage(error)}` }); }
+    finally { setBusy(null); }
+  };
+  const handleExecuteTimelocked = async (ticket: Ticket) => {
+    setBusy(`ticket-${ticket.id}`); setBanner(null);
+    try { safeUnwrap(await updateSelf("executeTimelockedTicket", [String(ticket.id)])); await refreshState(); setBanner({ kind: "success", text: `Ticket #${ticket.id} executed and settled.` }); }
+    catch (error) { setBanner({ kind: "error", text: `Ticket #${ticket.id} could not be executed: ${errorMessage(error)}` }); }
+    finally { setBusy(null); }
+  };
+  const handleCancelTimelocked = async (ticket: Ticket, reason: string = "Owner canceled timelock") => {
+    setBusy(`ticket-${ticket.id}`); setBanner(null);
+    try { safeUnwrap(await updateSelf("cancelTimelockedTicket", [[String(ticket.id), reason]])); await refreshState(); setBanner({ kind: "info", text: `Ticket #${ticket.id} timelock canceled.` }); }
+    catch (error) { setBanner({ kind: "error", text: `Ticket #${ticket.id} could not be canceled: ${errorMessage(error)}` }); }
     finally { setBusy(null); }
   };
   const handleRecoverLock = async () => {
@@ -171,6 +202,18 @@ function Dashboard() {
       setBusy(null);
     }
   };
+  const handleUpdateLabels = async (labels: [string, string][]) => {
+    setBusy("labels"); setBanner(null);
+    try {
+      safeUnwrap(await updateSelf("setRecipientLabels", [labels]));
+      await refreshState();
+      setBanner({ kind: "success", text: "Recipient labels saved on-chain." });
+    } catch (error) {
+      setBanner({ kind: "error", text: errorMessage(error) });
+    } finally {
+      setBusy(null);
+    }
+  };
   const handleProposeSwap = async (params: {
     fromToken: string;
     toToken: string;
@@ -192,6 +235,29 @@ function Dashboard() {
       setBanner({ kind: "info", text: "Swap proposal created and parked for owner approval." });
     } catch (error) {
       setBanner({ kind: "error", text: `Swap proposal failed: ${errorMessage(error)}` });
+    } finally {
+      setBusy(null);
+    }
+  };
+  const handleSyncPrices = async () => {
+    setSyncPrices(true); setBanner(null);
+    try {
+      const raw = (await updateSelf("getPortfolioValue", [null])) as unknown as TokenValuation[];
+      setPortfolioValues(raw ?? []);
+    } catch (error) {
+      setBanner({ kind: "error", text: `Could not refresh prices: ${errorMessage(error)}` });
+    } finally {
+      setSyncPrices(false);
+    }
+  };
+  const handleProposeTransfers = async (proposals: { token: string; recipient: string; amount: string; reason: string }[]) => {
+    setBusy("transfers"); setBanner(null);
+    try {
+      unwrapOk(await updateSelf("proposeTransfers", [proposals]));
+      await refreshState();
+      setBanner({ kind: "info", text: "Batch transfer proposal created and parked for owner approval." });
+    } catch (error) {
+      setBanner({ kind: "error", text: `Batch transfer proposal failed: ${errorMessage(error)}` });
     } finally {
       setBusy(null);
     }
@@ -223,7 +289,7 @@ function Dashboard() {
         if (page.length < 100) break;
         offset += 100;
       }
-      const csv = exportAuditToCsv(all, state?.balances ?? []);
+      const csv = exportAuditToCsv(all, state?.balances ?? [], state?.recipientLabels ?? []);
       downloadFile(`agent-vault-audit-${Date.now()}.csv`, csv, "text/csv");
     } catch (error) {
       console.error("CSV Export Error:", error);
@@ -272,13 +338,13 @@ function Dashboard() {
         {state.settlementInFlight && <div className="global-alert warning"><IconRefresh className="pb-spin" /><span>A settlement is in flight. Keep this console open until the outcome is known.</span></div>}
         {hasLock && <div className="global-alert danger"><IconInbox /><span>Settlement reconciliation is locked. Review the recorded activity before recovery.</span><button type="button" className="text-button" onClick={() => handleSelectView("activity")}>Open activity</button></div>}
         {banner && <div className={`notice-banner ${banner.kind}`} role={banner.kind === "error" ? "alert" : "status"}><span>{banner.text}</span><button type="button" className="icon-button" onClick={() => setBanner(null)} aria-label="Dismiss notification">×</button></div>}
-        {activeView === "command" && <CommandCenter state={state} onNavigate={(view) => handleSelectView(view as Workspace)} onRefresh={refreshState} onSync={handleSyncToken} onSyncAll={handleSyncAll} onRecover={handleRecoverLock} onProposeSwap={handleProposeSwap} busy={busy} />}
-        {activeView === "policy" && policyDraft && <PolicyPanel state={state} busy={busy} onUpdate={handleUpdate} draft={policyDraft} onChangeDraft={setPolicyDraft as unknown as React.Dispatch<React.SetStateAction<PolicyDraft>>} />}
+        {activeView === "command" && <CommandCenter state={state} onNavigate={(view) => handleSelectView(view as Workspace)} onRefresh={refreshState} onSync={handleSyncToken} onSyncAll={handleSyncAll} onRecover={handleRecoverLock} onProposeSwap={handleProposeSwap} onProposeTransfers={handleProposeTransfers} portfolioValue={portfolioValues} syncPrices={syncPrices} onSyncPrices={handleSyncPrices} busy={busy} />}
+        {activeView === "policy" && policyDraft && <PolicyPanel state={state} busy={busy} onUpdate={handleUpdate} onUpdateLabels={handleUpdateLabels} draft={policyDraft} onChangeDraft={setPolicyDraft as unknown as React.Dispatch<React.SetStateAction<PolicyDraft>>} />}
         {activeView === "swap" && <SwapWorkspace state={state} busy={busy} onProposeSwap={handleProposeSwap} />}
-        {activeView === "activity" && <ActivityPanel audit={state.audit} extraAudit={extraAudit} balances={state.balances} onLoadMore={handleLoadMoreActivity} hasMore={hasMoreActivity} onExportCsv={handleExportCsv} />}
-        {activeView === "approvals" && <ApprovalWorkspace tickets={state.pending} busy={busy} onApprove={handleApproveTicket} onReject={handleRejectTicket} balances={state.balances} />}
+        {activeView === "activity" && <ActivityPanel audit={state.audit} extraAudit={extraAudit} balances={state.balances} labels={state.recipientLabels ?? []} onLoadMore={handleLoadMoreActivity} hasMore={hasMoreActivity} onExportCsv={handleExportCsv} />}
+        {activeView === "approvals" && <ApprovalWorkspace tickets={state.pending} busy={busy} onApprove={handleApproveTicket} onReject={handleRejectTicket} onExecuteTimelocked={handleExecuteTimelocked} onCancelTimelocked={handleCancelTimelocked} balances={state.balances} labels={state.recipientLabels ?? []} />}
         {activeView === "skill" && <SkillExport state={state} />}
-        <footer className="console-footer"><span>Agent Vault · Neutron custody protocol</span><span>Live ledger state · no portfolio estimates</span></footer>
+        <footer className="console-footer"><span>Agent Vault · Neutron custody protocol</span><span>Live ledger prices · USD via ICPSwap pools</span></footer>
       </main>
     </div>
     <nav className="mobile-nav" aria-label="Mobile workspace navigation">

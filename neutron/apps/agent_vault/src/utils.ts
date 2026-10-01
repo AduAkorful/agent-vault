@@ -21,23 +21,46 @@ export function toBigInt(v: unknown): bigint {
   throw new TypeError(`toBigInt: unsupported value type: ${typeof v}`);
 }
 
-export function formatAmount(value: unknown, decimals: number | null): string {
-  let bi: bigint;
-  try {
-    bi = toBigInt(value);
-  } catch {
-    return "—";
+// Thrown when a token-derived value (amount, fee, etc.) is asked to be
+// formatted with a decimals value the dashboard does not know. Decimals must
+// always come from a synced Balance (or the backend's TokenValuation fields);
+// there is no fallback table.
+export class MissingDecimalsError extends Error {
+  constructor(token: string, field: string) {
+    super(`Missing decimals for ${token} (${field})`);
+    this.name = "MissingDecimalsError";
   }
-  if (decimals === null || decimals === undefined || decimals < 0) {
-    return bi.toString();
+}
+
+// Format a token amount using its decimals. Throws MissingDecimalsError if
+// decimals is null/undefined/<0 — the caller must resolve decimals from a
+// synced Balance first. This intentionally has no "—" fallback: a missing
+// decimals is a programming error or a UI input boundary, and the caller
+// decides how to surface it (e.g. block the input, render a disabled row).
+export function formatAmount(value: unknown, decimals: number | null | undefined, token?: string, field?: string): string {
+  const bi = toBigInt(value);
+  if (decimals === null || decimals === undefined) {
+    throw new MissingDecimalsError(token ?? "<unknown>", field ?? "amount");
   }
-  const safeDecimals = Math.min(decimals, 18);
-  const divisor = 10n ** BigInt(safeDecimals);
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
+    throw new RangeError(`formatAmount: invalid decimals ${decimals}`);
+  }
+  if (decimals === 0) return bi.toString();
+  const divisor = 10n ** BigInt(decimals);
   const integerPart = bi / divisor;
   const fractionPart = bi % divisor;
   if (fractionPart === 0n) return integerPart.toString();
   const fracStr = fractionPart.toString().padStart(decimals, "0").replace(/0+$/, "");
   return `${integerPart}.${fracStr}`;
+}
+
+// Format a ledger pointer that has no token-decimals interpretation: block
+// indices, approval block indices, transaction ids, and similar opaque
+// values. Returns the bigint as a decimal string — same as `toBigInt` followed
+// by `.toString()`. Kept as a named function so call sites are explicit about
+// the intent (no decimals, no formatting).
+export function formatBaseUnit(value: unknown): string {
+  return toBigInt(value).toString();
 }
 
 export function toPrincipalText(v: unknown): string {
@@ -141,18 +164,16 @@ export function isSettlementSuccess(settlement: JsonValue): boolean {
   return false;
 }
 
-export const KNOWN_TOKEN_DECIMALS: Record<string, number> = {
-  "ryjl3-tyaaa-aaaaa-aaaba-cai": 8, // ICP
-  "mxzaz-hqaaa-aaaar-qaada-cai": 8, // ckBTC
-  "xevnm-gaaaa-aaaar-qafnq-cai": 6, // ckUSDC
-};
-
+// Resolve a token's decimals from a synced Balance. There is no fallback
+// table — decimals are read live from the ledger and live on the Balance
+// record that `syncBalance`/`syncAllBalances` populates. If the token has
+// not been synced, this returns `null` and the caller must block the input
+// or render an honest "sync required" state.
 export function getTokenDecimals(tokenPrincipal: string, balances: Balance[] = []): number | null {
   if (!tokenPrincipal) return null;
   const norm = tokenPrincipal.toLowerCase().trim();
   const found = balances.find((b) => toPrincipalText(b.token.id).toLowerCase() === norm);
   if (found) return found.token.decimals;
-  if (norm in KNOWN_TOKEN_DECIMALS) return KNOWN_TOKEN_DECIMALS[norm]!;
   return null;
 }
 
@@ -185,6 +206,10 @@ export function formatVaultError(error: JsonValue): string {
           return "Mandatory DEX Swap Approval";
         case "TooManyPendingTickets":
           return "Pending Approval Cap Reached";
+        case "OutsideAllowedHours":
+          return "Outside Allowed Time Window";
+        case "TimelockInProgress":
+          return "Approval Timelock In Progress";
         case "RecipientNotAllowed":
           return "Recipient Not in Allowlist";
         case "TokenLimitNotConfigured":
@@ -257,6 +282,10 @@ export function getErrorGuidance(error: JsonValue): string | null {
         return "The circuit breaker is tripped. Owner must reset it in the Command Center.";
       case "TooManyPendingTickets":
         return "Pending approval cap (1,000) reached. Owner must approve or reject existing tickets first.";
+      case "OutsideAllowedHours":
+        return "This recipient has time-based restrictions. Transfer is allowed only during configured UTC hours and otherwise escalates.";
+      case "TimelockInProgress":
+        return "The owner approved this ticket but the approval timelock has not yet expired. Wait or cancel via the approvals inbox.";
       case "SettlementInFlight":
         return "A settlement is already in progress. Wait for it to complete.";
       case "ExternalFailure": {
@@ -305,7 +334,28 @@ export function getErrorGuidance(error: JsonValue): string | null {
   return null;
 }
 
-export function parseActionDetails(action: JsonValue, balances: Balance[] = []): ActionDetails {
+// Format a token amount when decimals may be missing. If the token has not
+// been synced, return the raw base-unit string with a ` (unsynced)` marker so
+// the operator can see why no formatting was applied — never an em-dash, which
+// would hide a real value. Throws are caught and rendered as a placeholder
+// with the error name.
+export function formatAmountSafe(value: unknown, decimals: number | null | undefined, token?: string, field?: string): string {
+  if (decimals === null || decimals === undefined) {
+    try {
+      return `${toBigInt(value).toString()} (sync ${token ?? "token"})`;
+    } catch {
+      return "unreadable";
+    }
+  }
+  try {
+    return formatAmount(value, decimals, token, field);
+  } catch (error) {
+    if (error instanceof MissingDecimalsError) return `sync ${token ?? "token"}`;
+    throw error;
+  }
+}
+
+export function parseActionDetails(action: JsonValue, balances: Balance[] = [], labels: [string, string][] = []): ActionDetails {
   const tokenSymbols = new Map(balances.map((b) => [toPrincipalText(b.token.id), b.token.symbol]));
 
   if (typeof action === "object" && action !== null) {
@@ -317,9 +367,9 @@ export function parseActionDetails(action: JsonValue, balances: Balance[] = []):
       const rawAmount = String(t.amount ?? "");
       const reason = t.reason ? String(t.reason) : undefined;
       const decimals = getTokenDecimals(token, balances);
-      const amount = formatAmount(rawAmount, decimals);
+      const amount = formatAmountSafe(rawAmount, decimals, token, "transfer.amount");
       const tokenLabel = tokenSymbols.get(token) || getPrincipalLabel(token) || shortenPrincipal(token);
-      const recipientLabel = getPrincipalLabel(recipient) || shortenPrincipal(recipient);
+      const recipientLabel = resolveRecipientLabel(recipient, labels) || getPrincipalLabel(recipient) || shortenPrincipal(recipient);
 
       return {
         type: "transfer",
@@ -344,8 +394,8 @@ export function parseActionDetails(action: JsonValue, balances: Balance[] = []):
 
       const fromDecimals = getTokenDecimals(fromToken, balances);
       const toDecimals = getTokenDecimals(toToken, balances);
-      const amount = formatAmount(rawAmount, fromDecimals);
-      const minReturn = formatAmount(rawMinReturn, toDecimals);
+      const amount = formatAmountSafe(rawAmount, fromDecimals, fromToken, "swap.amount");
+      const minReturn = formatAmountSafe(rawMinReturn, toDecimals, toToken, "swap.minReturn");
 
       const fromLabel = tokenSymbols.get(fromToken) || getPrincipalLabel(fromToken) || shortenPrincipal(fromToken);
       const toLabel = tokenSymbols.get(toToken) || getPrincipalLabel(toToken) || shortenPrincipal(toToken);
@@ -370,12 +420,12 @@ export function parseActionDetails(action: JsonValue, balances: Balance[] = []):
   return {
     type: "unknown",
     summary: typeof action === "string" ? action : JSON.stringify(action),
-    amount: "—",
+    amount: "unreadable",
   };
 }
 
-export function describeAction(action: JsonValue, balances: Balance[] = []): string {
-  const details = parseActionDetails(action, balances);
+export function describeAction(action: JsonValue, balances: Balance[] = [], labels: [string, string][] = []): string {
+  const details = parseActionDetails(action, balances, labels);
   return details.summary;
 }
 
@@ -436,17 +486,27 @@ export function makePolicyDraft(policy: Policy, balances: Balance[] = []): Polic
   return {
     limits: policy.limits.map((l) => {
       const decimals = getTokenDecimals(toPrincipalText(l.token), balances);
+      const token = toPrincipalText(l.token);
       return {
-        token: toPrincipalText(l.token),
-        maxPerTx: formatAmount(l.limits.maxPerTx, decimals),
-        maxHourlySpend: formatAmount(l.limits.maxHourlySpend, decimals),
-        maxDailySpend: formatAmount(l.limits.maxDailySpend, decimals),
+        token,
+        maxPerTx: formatAmountSafe(l.limits.maxPerTx, decimals, token, "limit.maxPerTx"),
+        maxHourlySpend: formatAmountSafe(l.limits.maxHourlySpend, decimals, token, "limit.maxHourlySpend"),
+        maxDailySpend: formatAmountSafe(l.limits.maxDailySpend, decimals, token, "limit.maxDailySpend"),
       };
     }),
     recipients: policy.allowlists.recipients.join("\n"),
     dexes: policy.allowlists.dexes.join("\n"),
     pairs: formatPairs(policy.allowlists.pairs),
+    tokenRecipients: (policy.allowlists.tokenRecipients ?? []).map(([token, recipients]) => [
+      toPrincipalText(token),
+      recipients.map(toPrincipalText),
+    ]) as [string, string[]][],
+    allowedHours: (policy.allowedHours ?? []).map(([principal, window]) => [
+      toPrincipalText(principal),
+      { start: Number(window.start), end: Number(window.end), days: (window.days ?? []).map((d) => Number(d)) },
+    ]) as [string, { start: number; end: number; days: number[] }][],
     failureThreshold: policy.failureThreshold.toString(),
+    approvalTimelock: (policy.approvalTimelock ?? 0n).toString(),
   };
 }
 
@@ -479,6 +539,14 @@ export function getPrincipalLabel(p: string): string | null {
   return KNOWN_PRINCIPALS[clean] || null;
 }
 
+export function resolveRecipientLabel(principal: string, labels: [string, string][] = []): string | null {
+  const norm = principal.trim().toLowerCase();
+  for (const [p, label] of labels) {
+    if (p.trim().toLowerCase() === norm) return label;
+  }
+  return null;
+}
+
 export const PRINCIPAL_PATTERN: RegExp = /^[a-z0-9]{3,8}(-[a-z0-9]{3,8}){0,15}$/;
 
 export function isValidPrincipal(p: string): boolean {
@@ -507,10 +575,19 @@ export function policyArg(policy: Policy, draft: PolicyDraft, balances: Balance[
       recipients: parseLines(draft.recipients),
       dexes: parseLines(draft.dexes),
       pairs: parsePairs(draft.pairs),
+      tokenRecipients: (draft.tokenRecipients ?? []).map(([token, recipients]) => [
+        token,
+        recipients.filter((r) => r.trim().length > 0),
+      ]),
     },
     circuitBreaker: policy.circuitBreaker,
     failureThreshold: toBigInt(draft.failureThreshold).toString(),
     consecutiveFailures: policy.consecutiveFailures.toString(),
+    allowedHours: (draft.allowedHours ?? []).map(([principal, window]) => [
+      principal,
+      { start: window.start, end: window.end, days: (window.days ?? []).map((d) => String(d)) },
+    ]),
+    approvalTimelock: toBigInt(draft.approvalTimelock || "0").toString(),
   } as unknown as JsonValue;
 }
 
@@ -563,6 +640,43 @@ export function validatePolicyDraft(draft: PolicyDraft, balances: Balance[] = []
   if (!/^[0-9]+$/.test(threshold) || BigInt(threshold) <= 0n) {
     errors.push("Failure threshold must be a positive whole number.");
   }
+
+  const timelock = (draft.approvalTimelock || "0").trim();
+  if (!/^[0-9]+$/.test(timelock) || BigInt(timelock) < 0n) {
+    errors.push("Approval timelock must be a non-negative whole number of seconds.");
+  }
+
+  (draft.allowedHours ?? []).forEach(([principal, window], index) => {
+    if (!isValidPrincipal(principal)) {
+      errors.push(`Allowed hours ${index + 1}: recipient principal is not valid.`);
+    }
+    if (window.start < 0 || window.start > 23) {
+      errors.push(`Allowed hours ${index + 1}: start hour must be 0–23.`);
+    }
+    if (window.end < 0 || window.end > 23) {
+      errors.push(`Allowed hours ${index + 1}: end hour must be 0–23.`);
+    }
+    (window.days ?? []).forEach((d) => {
+      if (!Number.isInteger(d) || d < 0 || d > 6) {
+        errors.push(`Allowed hours ${index + 1}: weekday ${d} is invalid (must be 0–6, Sun–Sat).`);
+      }
+    });
+    const dayList = window.days ?? [];
+    if (new Set(dayList).size !== dayList.length) {
+      errors.push(`Allowed hours ${index + 1}: weekday list contains duplicates.`);
+    }
+  });
+
+  (draft.tokenRecipients ?? []).forEach(([token, recipients], index) => {
+    if (!isValidPrincipal(token)) {
+      errors.push(`Per-token recipient list ${index + 1}: token principal is not valid.`);
+    }
+    recipients.forEach((r) => {
+      if (!isValidPrincipal(r)) {
+        errors.push(`Per-token recipient list ${index + 1}: recipient ${r} is not a valid principal.`);
+      }
+    });
+  });
 
   return [...new Set(errors)];
 }
@@ -624,10 +738,10 @@ function csvEscape(value: string): string {
   return value;
 }
 
-export function exportAuditToCsv(audit: AuditEntry[], balances: Balance[] = []): string {
+export function exportAuditToCsv(audit: AuditEntry[], balances: Balance[] = [], labels: [string, string][] = []): string {
   const headers = ["ID", "Timestamp", "Action Type", "Tier", "Policy Error", "Ticket ID", "Note", "Settlement Status", "Block Index/AmountOut"];
   const rows = audit.map((entry) => {
-    const details = parseActionDetails(entry.action, balances);
+    const details = parseActionDetails(entry.action, balances, labels);
     const receipt = parseReceipt(entry.settlement);
     const tierName = getTier(entry.tier) === "autonomous" ? "Autonomous" : getTier(entry.tier) === "escalation" ? "Escalation" : "Forbidden";
     const settlementStatus = entry.settlement === null ? "unsettled" : receipt ? `settled (${receipt.type === "transfer" ? receipt.blockIndex : receipt.amountOut})` : "settled";

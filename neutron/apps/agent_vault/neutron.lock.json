@@ -9,12 +9,22 @@
           "entry": "a48ed7297bd53e070f1cf06017ac0e70544403cb218b6d0c7519cee4b5e7689a"
         },
         "2": {
-          "hash": "34485a666600fc5db7bede1f41c9da54b838cb72d729eb3fa347b0a8ac310e07",
-          "entry": "9576125d24dd3b0b7d37bdd7dfae5b79864bf678d16601a825a2f4afde6ff1a6"
+          "hash": "23d20be040d60b9c27b3ac59a041d53570da0e054f826e17f852d26732346690",
+          "entry": "666fd7fe62c7c8334c5139a8002287c7e0a2987fa4dd0ae0dad25195c78eea36"
+        },
+        "3": {
+          "hash": "9258f2abc1894956a14ab742f09065a3b00b2c0068988652886e194b24bb0384",
+          "entry": "cb462dd66eff10faae317f1a6674653a66b7cf55ed151d76aeebbbfa94f5b9b8"
+        },
+        "4": {
+          "hash": "4db8d02d9ad6b741e4d2bcce0f097adb400787779c2fd36e29cfaea84f8e4b14",
+          "entry": "4db8d02d9ad6b741e4d2bcce0f097adb400787779c2fd36e29cfaea84f8e4b14"
         }
       },
       "migrations": {
-        "1->2": "4ef15f3a5d02ffb5d5a1d59a4c4c34d10ca1e343639b94e2bb2574b2b8350bb0"
+        "1->2": "2934ccc006fe6f89d378204564558a27ad78056e9b8169b8cf8d03981a041f37",
+        "2->3": "995d261a89ddca3b33f16c8b4bb22e795485e027b2dcaba6307aebfda7af8269",
+        "3->4": "91da2dd355d313c3d61589026e23a884eba8d3a26dae4e76d66aed6742d7bc76"
       }
     }
   }

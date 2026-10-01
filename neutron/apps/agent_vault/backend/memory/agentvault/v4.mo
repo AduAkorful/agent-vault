@@ -1,15 +1,16 @@
-// Agent Vault — persistent state schema (managed memory store `agentvault`, v2).
+// Agent Vault — persistent state schema (managed memory store `agentvault`, v4).
+//
+// Adds to v3:
+//   - TimeWindow.days: per-recipient list of allowed weekdays (0=Sunday..6=Saturday).
+//     Empty list = every day of the week is allowed (backward compatible).
 //
 // IMMUTABILITY: once a packaged release pins this file's hash in
-// neutron.lock.json, it must never change — evolve the schema by adding v2.mo
-// plus a `migrations` entry, never by editing v1. Until that first release the
-// schema is still free to change (the lock is a local, regenerable artifact).
+// neutron.lock.json, it must never change — evolve the schema by adding v5.mo
+// plus a migrations entry, never by editing v4. Until first live release the
+// schema is free to change (the lock is a local, regenerable artifact).
 //
 // IMPORTS: package imports only. Relative imports are forbidden here so the
-// persisted layout cannot silently drift with app-local modules. Every type
-// reachable from `Mem` therefore lives inline in this file; return-only
-// projections (Outcome / VaultState / Result) are declared inline in main.mo so
-// their evolution never perturbs this schema hash.
+// persisted layout cannot silently drift with app-local modules.
 
 import Principal "mo:core/Principal";
 import Array "mo:core/Array";
@@ -41,10 +42,21 @@ module {
 
     public type TokenLimit = { token : Principal; limits : TokenLimits };
 
+    // Per-recipient time window in UTC. `start` and `end` are hours 0..23
+    // (start inclusive, end exclusive, wraps across midnight when start > end).
+    // `days` restricts the window to a set of weekdays; an empty list means
+    // "every day of the week".
+    public type TimeWindow = { start : Nat; end : Nat; days : [Nat] };
+
+    // Additive per-token recipient allowlist: [(token, [allowedRecipients])].
+    // A recipient is permitted for a token if it appears in the GLOBAL
+    // allowlist OR in the per-token list for that token. Backward compatible:
+    // an empty tokenRecipients list reduces to global-only checking.
     public type Allowlists = {
         recipients : [Principal];
         dexes : [Principal];
         pairs : [TokenPair];
+        tokenRecipients : [(Principal, [Principal])];
     };
 
     public type Policy = {
@@ -53,6 +65,11 @@ module {
         circuitBreaker : Bool;
         failureThreshold : Nat;
         consecutiveFailures : Nat;
+        // Per-recipient UTC time windows. Empty = no time restrictions.
+        // Outside a recipient's window, transfers escalate (Escalation tier).
+        allowedHours : [(Principal, TimeWindow)];
+        // Owner approval defers settlement by this many seconds. 0 = immediate.
+        approvalTimelock : Nat;
     };
 
     public type TransferProposal = {
@@ -126,10 +143,10 @@ module {
         #PolicyProfileNotActive;
         #PolicyRevisionChanged;
         #ActivePolicyDeletion;
-        // A swap was proposed: swaps always park for owner approval and never
-        // settle autonomously (see Policy.classify / main.mo settleSwap).
         #SwapRequiresApproval;
         #TooManyPendingTickets;
+        #OutsideAllowedHours;
+        #TimelockInProgress;
     };
 
     public type PolicyEvaluation = {
@@ -145,13 +162,20 @@ module {
         policyError : ?VaultError;
     };
 
+    public type TicketStatus = { #pending; #approved : Receipt; #rejected : Text };
+
     public type Ticket = {
         id : Nat;
         action : Action;
         createdAt : Int;
         policyError : ?VaultError;
         evaluation : ?PolicyEvaluation;
-        status : { #pending; #approved : Receipt; #rejected : Text };
+        status : TicketStatus;
+        // When non-null, the ticket was owner-approved but settlement is deferred
+        // until this wall-clock time. During the deferral window the owner may
+        // cancel via cancelTimelockedTicket. After expiry, executeTimellockedTicket
+        // settles the exact staged intent.
+        timelockUntil : ?Int;
     };
 
     public type AuditEntry = {
@@ -166,23 +190,8 @@ module {
         note : Text;
     };
 
-    // A recorded outflow, fee-inclusive: the ledger debits `amount + fee` from
-    // the vault, so spend windows must sum both. Tagged by token so per-token
-    // limits never mix base units across decimals.
     public type Spend = { timestamp : Int; token : Principal; amount : Nat; fee : Nat };
 
-    // The durable record of an in-flight settlement, persisted BEFORE the ledger
-    // await so an unknown outcome (a lost or trapped response) stays recoverable.
-    // `intent` is present only once the debit has actually been submitted to the
-    // ledger; while it is null the settlement is still in its pre-submit window
-    // (fee/balance queries) and no ledger write has happened yet. On recovery the
-    // stored intent is re-submitted with the SAME createdAtTime + memo, so the
-    // ledger deduplicates it — #Duplicate means the original debit already
-    // committed (never paid twice), #Ok means it never did (commit now). `fee` is
-    // the exact fee the original attempt used, captured so the re-submit hashes
-    // identically at the ledger. Swap intents also persist their staged leg and
-    // discovered pool so recovery can reconcile ICRC legs and inspect stranded
-    // pool balances without ever re-running an unknown-outcome swap call.
     public type SettlementStage = {
         #transfer;
         #swapTransit;
@@ -234,7 +243,7 @@ module {
         // The vault's isolated ICRC-1 subaccount within the shared canister. Every
         // balance read and transfer debit operates on { owner = canister principal;
         // subaccount = vaultSubaccount } — never the canister default (all-zero)
-        // account — so the vault's holdings are custody-isolated from the canister
+        // account — so the vault's funds are custody-isolated from the canister
         // and from other apps in the same canister (R6). Deterministic, non-zero,
         // 32 bytes; see deriveVaultSubaccount.
         var vaultSubaccount : Blob;
@@ -257,10 +266,17 @@ module {
             // configures a token limit AND allowlists a recipient. No seeded
             // balances, tickets, or activity exist on a clean install.
             limits = ([] : [TokenLimit]);
-            allowlists = { recipients = []; dexes = []; pairs = [] };
+            allowlists = {
+                recipients = [];
+                dexes = [];
+                pairs = [];
+                tokenRecipients = [];
+            };
             circuitBreaker = false;
             failureThreshold = 3;
             consecutiveFailures = 0;
+            allowedHours = [];
+            approvalTimelock = 0;
         };
         {
             var policy = defaultPolicy;

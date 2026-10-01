@@ -1,7 +1,7 @@
 // Agent Vault — Velocity Gauge Animated Progress Indicator
 
 import React from "react";
-import { formatAmount } from "../utils";
+import { formatAmountSafe } from "../utils";
 
 export function VelocityGauge({
   label,
@@ -26,7 +26,7 @@ export function VelocityGauge({
       <div className="pb-gauge-labels">
         <span className="pb-gauge-name">{label}</span>
         <span className="pb-gauge-stat">
-          {formatAmount(spent, decimals)} / {formatAmount(limit, decimals)} {symbol} ({clamped}%)
+          {formatAmountSafe(spent, decimals, symbol, `gauge.${label}.spent`)} / {formatAmountSafe(limit, decimals, symbol, `gauge.${label}.limit`)} {symbol} ({clamped}%)
         </span>
       </div>
       <div className="pb-gauge-track">

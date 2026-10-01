@@ -229,17 +229,22 @@
       "methods": [
         "getVaultState",
         "getActivityHistory",
+        "getPortfolioValue",
         "syncBalance",
         "syncAllBalances",
         "evaluateTransfer",
         "proposeTransfer",
+        "proposeTransfers",
         "proposeSwap",
         "approveTicket",
         "rejectTicket",
+        "executeTimelockedTicket",
+        "cancelTimelockedTicket",
         "setDexConfig",
         "recoverSettlementLock",
         "setPolicy",
         "setCircuitBreaker",
+        "setRecipientLabels",
         "createPolicyProfile",
         "updatePolicyProfile",
         "setActivePolicyProfile",
@@ -250,9 +255,9 @@
       "api": 1,
       "entrypoints": [
         "get_vault_state",
-        "get_activity_history",
         "evaluate_transfer",
-        "propose_transfer"
+        "propose_transfer",
+        "propose_swap"
       ]
     }
   },
@@ -298,11 +303,23 @@
       "type": "update",
       "async": "async*"
     },
+    "proposeTransfers": {
+      "type": "update",
+      "async": "async*"
+    },
     "approveTicket": {
       "type": "update",
       "async": "async*"
     },
     "rejectTicket": {
+      "type": "update",
+      "async": false
+    },
+    "executeTimelockedTicket": {
+      "type": "update",
+      "async": "async*"
+    },
+    "cancelTimelockedTicket": {
       "type": "update",
       "async": false
     },
@@ -337,17 +354,31 @@
     "setCircuitBreaker": {
       "type": "update",
       "async": false
+    },
+    "setRecipientLabels": {
+      "type": "update",
+      "async": false
+    },
+    "getPortfolioValue": {
+      "type": "update",
+      "async": "async*"
     }
   },
   "memory": {
     "agentvault": {
-      "version": 2,
+      "version": 4,
       "schemas": {
         "1": {
           "src": "memory/agentvault/v1.mo"
         },
         "2": {
           "src": "memory/agentvault/v2.mo"
+        },
+        "3": {
+          "src": "memory/agentvault/v3.mo"
+        },
+        "4": {
+          "src": "memory/agentvault/v4.mo"
         }
       },
       "migrations": [
@@ -355,6 +386,16 @@
           "from": 1,
           "to": 2,
           "src": "memory/agentvault/v1_to_v2.mo"
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "src": "memory/agentvault/v2_to_v3.mo"
+        },
+        {
+          "from": 3,
+          "to": 4,
+          "src": "memory/agentvault/v3_to_v4.mo"
         }
       ]
     }

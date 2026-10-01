@@ -56,6 +56,7 @@ module {
                 };
             };
             var dexConfig = old.dexConfig;
+            var recipientLabels = [] : [(Principal, Text)];
             var vaultSubaccount = old.vaultSubaccount;
         }
     };

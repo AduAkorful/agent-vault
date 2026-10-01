@@ -86,21 +86,33 @@ describe("formatAmount", () => {
     expect(formatAmount("15000", 6)).toBe("0.015");
   });
 
-  test("returns raw string when decimals is null", () => {
-    expect(formatAmount("12345", null)).toBe("12345");
+  test("returns raw string when decimals is zero", () => {
+    expect(formatAmount("12345", 0)).toBe("12345");
   });
 
-  test("returns raw string when decimals is undefined", () => {
-    expect(formatAmount("12345", undefined)).toBe("12345");
+  test("throws MissingDecimalsError on null decimals", () => {
+    expect(() => formatAmount("1000000", null)).toThrow(/Missing decimals/);
+    expect(() => formatAmount("1000000", undefined)).toThrow(/Missing decimals/);
   });
 
-  test("returns raw string when decimals is negative", () => {
-    expect(formatAmount("12345", -1)).toBe("12345");
+  test("throws on invalid amount value", () => {
+    expect(() => formatAmount("abc", 6)).toThrow(TypeError);
+    expect(() => formatAmount(null, 6)).toThrow(TypeError);
   });
 
-  test("returns em dash on invalid amount", () => {
-    expect(formatAmount("abc", 6)).toBe("—");
-    expect(formatAmount(null, 6)).toBe("—");
+  test("returns raw string when token is allowlisted but decimals are unknown (formatAmountSafe)", async () => {
+    const { formatAmountSafe } = await import("../src/utils");
+    const out = formatAmountSafe("12345", null, "xevnm-gaaaa-aaaar-qafnq-cai", "test");
+    expect(out).toMatch(/12345/);
+    expect(out).toMatch(/sync/);
+  });
+});
+
+describe("formatBaseUnit", () => {
+  test("returns the decimal string of a bigint ledger pointer", async () => {
+    const { formatBaseUnit } = await import("../src/utils");
+    expect(formatBaseUnit("12345")).toBe("12345");
+    expect(formatBaseUnit(42n)).toBe("42");
   });
 });
 

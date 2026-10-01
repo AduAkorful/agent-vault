@@ -547,14 +547,14 @@ code, time {
 }
 
 .command-grid-top {
-  grid-template-columns: 1.25fr 1fr .85fr;
+  grid-template-columns: 1fr .9fr .85fr .75fr;
 }
 
 .command-grid-bottom {
   grid-template-columns: 1.4fr 1fr;
 }
 
-.surface-balance, .surface-gauge, .surface-custody, .surface-activity, .surface-approvals {
+.surface-balance, .surface-gauge, .surface-custody, .surface-allocation, .surface-activity, .surface-approvals {
   padding: 18px;
 }
 
@@ -1034,6 +1034,178 @@ code, time {
   display: flex;
   align-items: end;
   gap: 10px;
+}
+
+.label-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.label-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: rgba(13, 17, 18, 0.38);
+  border-radius: 8px;
+  .label-value {
+    font-weight: 600;
+    color: var(--text);
+    flex: 1;
+  }
+  .label-principal {
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--muted);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .icon-button.danger-icon {
+    flex-shrink: 0;
+  }
+}
+
+.label-input-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+  input[type="text"] {
+    flex: 1;
+  }
+   .button-secondary {
+    flex-shrink: 0;
+  }
+}
+
+.allocation-surface {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.allocation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  .surface-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+  }
+  .allocation-total {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text);
+  }
+}
+
+.allocation-empty {
+  padding: 20px;
+  text-align: center;
+}
+
+.allocation-placeholder {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  min-height: 120px;
+  .allocation-ring {
+    width: 60px;
+    height: 60px;
+    border: 2px dashed var(--line);
+    border-radius: 50%;
+  }
+  strong { color: var(--text); font-size: 13px; }
+  span { color: var(--muted); font-size: 11px; }
+}
+
+.allocation-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.allocation-chart {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  margin: 0 auto;
+}
+
+.allocation-donut {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.allocation-total {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  .allocation-total-label {
+    display: block;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+  }
+  .allocation-total-value {
+    display: block;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text);
+  }
+}
+
+.allocation-legend {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+
+.allocation-legend-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  .allocation-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+  }
+  .allocation-legend-label {
+    font-weight: 600;
+    color: var(--text);
+  }
+  .allocation-legend-value {
+    font-family: monospace;
+    color: var(--muted);
+    justify-self: end;
+  }
+  .allocation-legend-pct {
+    font-weight: 600;
+    color: var(--text);
+    min-width: 36px;
+    text-align: right;
+  }
+}
+
+.allocation-footer {
+  margin-top: 8px;
 }
 
 /* Premium Inputs with Focus Glow (OTP Input style) */
@@ -2192,7 +2364,7 @@ code, time {
   .command-grid-top, .command-grid-bottom, .reference-grid, .approval-layout {
     grid-template-columns: 1fr;
   }
-  .surface-balance, .surface-gauge, .surface-custody, .surface-activity, .surface-approvals {
+  .surface-balance, .surface-gauge, .surface-custody, .surface-allocation, .surface-activity, .surface-approvals {
     padding: 15px;
   }
   .balance-row {
@@ -2416,6 +2588,121 @@ code, time {
 @keyframes slide-up {
   from { transform: translateY(20px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
+}
+
+/* ==========================================================================
+   BATCH TRANSFER MODAL STYLES
+   ========================================================================== */
+
+.batch-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.batch-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr auto;
+  gap: 8px;
+  align-items: end;
+
+  @media (max-width: 768px) {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto auto auto auto 40px;
+    row-gap: 8px;
+
+    .batch-token,
+    .batch-recipient,
+    .batch-amount,
+    .batch-reason {
+      grid-column: 1 / span 2;
+    }
+
+    .batch-token {
+      grid-row: 1;
+    }
+    .batch-recipient {
+      grid-row: 2;
+    }
+    .batch-amount {
+      grid-row: 3;
+    }
+    .batch-reason {
+      grid-row: 4;
+    }
+    /* Remove row button */
+    > button {
+      grid-column: 1 / span 2;
+      grid-row: 5;
+    }
+  }
+}
+
+.batch-input {
+  background: rgba(10, 15, 25, 0.6);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.2s;
+
+  &:focus {
+    border-color: var(--amber);
+  }
+
+  &::placeholder {
+    color: var(--muted);
+    opacity: 0.6;
+  }
+}
+
+.batch-token {
+  min-width: 100px;
+}
+
+.modal-body-text {
+  font-size: 0.85rem;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0 0 8px 0;
+}
+
+/* Policy: time windows & per-token recipients */
+.time-window-list,
+.token-recipient-list,
+.policy-limit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.time-window-row,
+.policy-limit-row,
+.token-recipient-row {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+}
+
+.time-window-row {
+  .field {
+    flex: 1;
+    min-width: 100px;
+  }
+}
+
+.token-recipient-row {
+  .field {
+    flex: 2;
+    min-width: 140px;
+  }
+  .allowlist-manager {
+    flex: 3;
+  }
 }
 
 /* ==========================================================================

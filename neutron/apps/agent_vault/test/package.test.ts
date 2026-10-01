@@ -14,14 +14,19 @@ const UPDATE_METHODS = [
   "syncBalance",
   "syncAllBalances",
   "proposeTransfer",
+  "proposeTransfers",
   "evaluateTransfer",
   "proposeSwap",
   "approveTicket",
   "rejectTicket",
+  "executeTimelockedTicket",
+  "cancelTimelockedTicket",
   "setDexConfig",
   "recoverSettlementLock",
   "setPolicy",
   "setCircuitBreaker",
+  "setRecipientLabels",
+  "getPortfolioValue",
   "createPolicyProfile",
   "updatePolicyProfile",
   "setActivePolicyProfile",
@@ -39,9 +44,12 @@ const ASYNC_UPDATE_METHODS = new Set([
   "syncBalance",
   "syncAllBalances",
   "proposeTransfer",
+  "proposeTransfers",
   "evaluateTransfer",
   "proposeSwap",
   "approveTicket",
+  "getPortfolioValue",
+  "executeTimelockedTicket",
   "recoverSettlementLock",
 ]);
 
@@ -118,7 +126,7 @@ import {
   unpackNeutronPackage,
 } from "neutron-compiler/src/install.ts";
 
-const packageUrl = new URL("../agent_vault.v0.1.0.neutron", import.meta.url);
+const packageUrl = new URL("../agent_vault.v0.1.1.neutron", import.meta.url);
 
 test("agent_vault package contains dashboard, service, schema, and Motoko roots", async () => {
   const unpacked = unpackNeutronPackage(await readFile(packageUrl));
@@ -140,9 +148,9 @@ test("agent_vault package contains dashboard, service, schema, and Motoko roots"
   expect(prepared.manifest.capabilities?.backend_calls).toBeDefined();
   expect(prepared.manifest.capabilities?.agent_entrypoints?.entrypoints).toEqual([
     "get_vault_state",
-    "get_activity_history",
-    "sync_balance",
+    "evaluate_transfer",
     "propose_transfer",
+    "propose_swap",
   ]);
   expect(prepared.files.some((file) => file.path.startsWith("mo/"))).toBe(true);
 });

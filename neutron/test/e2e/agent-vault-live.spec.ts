@@ -451,15 +451,16 @@ type VaultError = Record<string, unknown>;
 
 const vaultIdl = ({ IDL: idl }: { IDL: any }) => {
   const externalError = idl.Record({ code: idl.Text, message: idl.Text, partial: idl.Bool });
-  const vaultError = idl.Variant({ ActivePolicyDeletion: idl.Null, AlreadyResolved: idl.Null, CircuitBreakerActive: idl.Null, DailyLimit: idl.Null, DexNotAllowed: idl.Null, ExternalFailure: externalError, HourlyLimit: idl.Null, InsufficientBalance: idl.Null, InvalidAmount: idl.Null, InvalidPolicy: idl.Null, InvalidPolicyName: idl.Null, InvalidQuote: idl.Null, InvalidSlippage: idl.Null, PerTransactionLimit: idl.Null, PolicyProfileNotActive: idl.Null, PolicyProfileNotFound: idl.Null, PolicyRevisionChanged: idl.Null, QuoteExpired: idl.Null, RecipientNotAllowed: idl.Null, SettlementInFlight: idl.Null, SettlementLockNotStale: idl.Null, SwapRequiresApproval: idl.Null, TicketNotFound: idl.Null, TokenLimitNotConfigured: idl.Null, TokenPairNotAllowed: idl.Null, UnsupportedTokenStandard: idl.Null });
+  const vaultError = idl.Variant({ ActivePolicyDeletion: idl.Null, AlreadyResolved: idl.Null, CircuitBreakerActive: idl.Null, DailyLimit: idl.Null, DexNotAllowed: idl.Null, ExternalFailure: externalError, HourlyLimit: idl.Null, InsufficientBalance: idl.Null, InvalidAmount: idl.Null, InvalidPolicy: idl.Null, InvalidPolicyName: idl.Null, InvalidQuote: idl.Null, InvalidSlippage: idl.Null, OutsideAllowedHours: idl.Null, PerTransactionLimit: idl.Null, PolicyProfileNotActive: idl.Null, PolicyProfileNotFound: idl.Null, PolicyRevisionChanged: idl.Null, QuoteExpired: idl.Null, RecipientNotAllowed: idl.Null, SettlementInFlight: idl.Null, SettlementLockNotStale: idl.Null, SwapRequiresApproval: idl.Null, TicketNotFound: idl.Null, TimelockInProgress: idl.Null, TokenLimitNotConfigured: idl.Null, TokenPairNotAllowed: idl.Null, TooManyPendingTickets: idl.Null, UnsupportedTokenStandard: idl.Null });
   const token = idl.Record({ id: idl.Principal, symbol: idl.Text, decimals: idl.Nat8, standard: idl.Text, fee: idl.Nat });
   const balance = idl.Record({ token, amount: idl.Nat, syncedAt: idl.Int });
   const tokenSpend = idl.Record({ token: idl.Principal, hourly: idl.Nat, daily: idl.Nat });
   const tokenPair = idl.Record({ from: idl.Principal, to: idl.Principal });
   const tokenLimits = idl.Record({ maxPerTx: idl.Nat, maxHourlySpend: idl.Nat, maxDailySpend: idl.Nat });
   const tokenLimit = idl.Record({ token: idl.Principal, limits: tokenLimits });
-  const allowlists = idl.Record({ recipients: idl.Vec(idl.Principal), dexes: idl.Vec(idl.Principal), pairs: idl.Vec(tokenPair) });
-  const policy = idl.Record({ limits: idl.Vec(tokenLimit), allowlists, circuitBreaker: idl.Bool, failureThreshold: idl.Nat, consecutiveFailures: idl.Nat });
+  const timeWindow = idl.Record({ start: idl.Nat, end: idl.Nat, days: idl.Vec(idl.Nat) });
+  const allowlists = idl.Record({ recipients: idl.Vec(idl.Principal), dexes: idl.Vec(idl.Principal), pairs: idl.Vec(tokenPair), tokenRecipients: idl.Vec(idl.Tuple(idl.Principal, idl.Vec(idl.Principal))) });
+  const policy = idl.Record({ limits: idl.Vec(tokenLimit), allowlists, circuitBreaker: idl.Bool, failureThreshold: idl.Nat, consecutiveFailures: idl.Nat, allowedHours: idl.Vec(idl.Tuple(idl.Principal, timeWindow)), approvalTimelock: idl.Nat });
   const transferProposal = idl.Record({ token: idl.Principal, recipient: idl.Principal, amount: idl.Nat, reason: idl.Text });
   const swapProposal = idl.Record({ fromToken: idl.Principal, toToken: idl.Principal, dex: idl.Principal, amount: idl.Nat, minReturn: idl.Nat, slippageBps: idl.Nat, quoteExpiresAt: idl.Int, reason: idl.Text });
   const action = idl.Variant({ transfer: transferProposal, swap: swapProposal });
@@ -469,11 +470,11 @@ const vaultIdl = ({ IDL: idl }: { IDL: any }) => {
   const profile = idl.Record({ id: idl.Nat, name: idl.Text, revision: idl.Nat, policy });
   const evaluation = idl.Record({ profileId: idl.Nat, profileName: idl.Text, revision: idl.Nat, fee: idl.Opt(idl.Nat), hourlyBefore: idl.Opt(idl.Nat), dailyBefore: idl.Opt(idl.Nat), hourlyAfter: idl.Opt(idl.Nat), dailyAfter: idl.Opt(idl.Nat), tier, policyError: idl.Opt(vaultError) });
   const outcome = idl.Record({ tier, error: idl.Opt(vaultError), ticketId: idl.Opt(idl.Nat), auditId: idl.Nat, settlement: idl.Opt(settlement) });
-  const ticket = idl.Record({ id: idl.Nat, action, createdAt: idl.Int, policyError: idl.Opt(vaultError), evaluation: idl.Opt(evaluation), status: idl.Variant({ pending: idl.Null, approved: receipt, rejected: idl.Text }) });
+  const ticket = idl.Record({ id: idl.Nat, action, createdAt: idl.Int, policyError: idl.Opt(vaultError), evaluation: idl.Opt(evaluation), status: idl.Variant({ pending: idl.Null, approved: receipt, rejected: idl.Text }), timelockUntil: idl.Opt(idl.Int) });
   const audit = idl.Record({ id: idl.Nat, action, tier, policyError: idl.Opt(vaultError), evaluation: idl.Opt(evaluation), settlement: idl.Opt(settlement), timestamp: idl.Int, ticketId: idl.Opt(idl.Nat), note: idl.Text });
   const settlementLock = idl.Record({ action, startedAt: idl.Int, profile: idl.Opt(idl.Record({ id: idl.Nat, name: idl.Text, revision: idl.Nat })) });
   const depositAccount = idl.Record({ owner: idl.Principal, subaccount: idl.Vec(idl.Nat8) });
-  const vaultState = idl.Record({ balances: idl.Vec(balance), policies: idl.Vec(profile), activePolicyId: idl.Nat, policy, spend: idl.Vec(tokenSpend), pending: idl.Vec(ticket), audit: idl.Vec(audit), settlementInFlight: idl.Bool, settlementLock: idl.Opt(settlementLock), dexConfig: idl.Record({ factory: idl.Principal, feeTier: idl.Nat }), depositAccount });
+  const vaultState = idl.Record({ balances: idl.Vec(balance), policies: idl.Vec(profile), activePolicyId: idl.Nat, policy, spend: idl.Vec(tokenSpend), pending: idl.Vec(ticket), audit: idl.Vec(audit), settlementInFlight: idl.Bool, settlementLock: idl.Opt(settlementLock), dexConfig: idl.Record({ factory: idl.Principal, feeTier: idl.Nat }), depositAccount, recipientLabels: idl.Vec(idl.Tuple(idl.Principal, idl.Text)) });
   return idl.Service({
     app_agent_vault__getVaultState: idl.Func([idl.Null], [idl.Variant({ ok: vaultState, err: vaultError })], ["query"]),
     app_agent_vault__proposeTransfer: idl.Func([idl.Tuple(idl.Principal, idl.Principal, idl.Nat, idl.Text)], [idl.Variant({ ok: outcome, err: vaultError })], []),
@@ -484,6 +485,7 @@ const vaultIdl = ({ IDL: idl }: { IDL: any }) => {
     app_agent_vault__rejectTicket: idl.Func([idl.Tuple(idl.Nat, idl.Text)], [idl.Variant({ ok: idl.Nat, err: vaultError })], []),
     app_agent_vault__setPolicy: idl.Func([policy], [idl.Variant({ ok: idl.Null, err: vaultError })], []),
     app_agent_vault__setCircuitBreaker: idl.Func([idl.Bool], [idl.Variant({ ok: idl.Null, err: vaultError })], []),
+    app_agent_vault__setRecipientLabels: idl.Func([idl.Vec(idl.Tuple(idl.Principal, idl.Text))], [idl.Variant({ ok: idl.Null, err: vaultError })], []),
     app_agent_vault__createPolicyProfile: idl.Func([idl.Tuple(idl.Text, policy)], [idl.Variant({ ok: idl.Nat, err: vaultError })], []),
     app_agent_vault__updatePolicyProfile: idl.Func([idl.Tuple(idl.Nat, idl.Text, policy)], [idl.Variant({ ok: idl.Null, err: vaultError })], []),
     app_agent_vault__setActivePolicyProfile: idl.Func([idl.Nat], [idl.Variant({ ok: idl.Null, err: vaultError })], []),

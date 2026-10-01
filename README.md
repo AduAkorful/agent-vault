@@ -109,7 +109,7 @@ Agent Vault provides two distinct surfaces communicating through the Neutron ker
    - Agent Skill download workspace.
 
 2. **Resident AI Agent Surface (`service.ts`)**:
-   - Four tool entrypoints: `get_vault_state`, `get_activity_history`, `evaluate_transfer`, `propose_transfer`.
+   - Four tool entrypoints: `get_vault_state`, `evaluate_transfer`, `propose_transfer`, `propose_swap`.
    - Owner-only methods (policy configuration, ticket approval/rejection, circuit breaker, recovery) are strictly excluded from agent authority.
    - `syncAllBalances` batch sync is available to the dashboard via preapproved self-calls.
 

@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import type { VaultState, Balance } from "../types";
-import { formatAmount, parseFriendlyAmount, shortenPrincipal, toPrincipalText } from "../utils";
+import { formatAmountSafe, parseFriendlyAmount, shortenPrincipal, toPrincipalText } from "../utils";
 import { IconArrowDown, IconChevronDown, IconGear, IconInfo, IconSearch, IconSwap, IconX } from "./Icons";
 
 interface SwapFormProps {
@@ -33,7 +33,11 @@ export function SwapForm({ state, busy, onPropose }: SwapFormProps) {
   const dexes = state.policy.allowlists.dexes;
   const dex = dexes[0] ? toPrincipalText(dexes[0]) : "";
 
-  // Dynamic set of all available tokens (synced balances, policy pairs, and standard ledgers)
+  // Token candidates are derived only from the user's synced balances and the
+  // policy's allowlisted pairs — never from a hardcoded list. If a principal
+  // is in the allowlist but has no synced Balance yet, it still appears so
+  // the user can see what they have allowlisted, but the row is marked
+  // "Sync required" and the swap button stays disabled until sync happens.
   const allAvailableTokens = useMemo(() => {
     const set = new Set<string>();
     for (const b of state.balances) {
@@ -43,10 +47,6 @@ export function SwapForm({ state, busy, onPropose }: SwapFormProps) {
       set.add(toPrincipalText(pair.from));
       set.add(toPrincipalText(pair.to));
     }
-    set.add("ryjl3-tyaaa-aaaaa-aaaba-cai"); // ICP
-    set.add("mxzaz-hqaaa-aaaar-qaada-cai"); // ckBTC
-    set.add("xevnm-gaaaa-aaaar-qafnq-cai"); // ckUSDC
-    set.add("cngnf-vqaaa-aaaar-qag4q-cai"); // ckUSDT
     return Array.from(set);
   }, [state.balances, state.policy.allowlists.pairs]);
 
@@ -57,14 +57,14 @@ export function SwapForm({ state, busy, onPropose }: SwapFormProps) {
     (b) => toPrincipalText(b.token.id) === actualFromToken,
   );
   const fromDecimals = fromBalance?.token.decimals ?? null;
-  const fromSymbol = fromBalance?.token.symbol ?? (actualFromToken ? getTokenSymbol(actualFromToken, state.balances) : "Select token");
+  const fromSymbol = fromBalance?.token.symbol ?? (actualFromToken ? shortenPrincipal(actualFromToken) : "Select token");
   const amountBase = parseFriendlyAmount(amount, fromDecimals);
 
   const toBalance = state.balances.find(
     (b) => toPrincipalText(b.token.id) === actualToToken,
   );
   const toDecimals = toBalance?.token.decimals ?? null;
-  const toSymbol = toBalance?.token.symbol ?? (actualToToken ? getTokenSymbol(actualToToken, state.balances) : "Select token");
+  const toSymbol = toBalance?.token.symbol ?? (actualToToken ? shortenPrincipal(actualToToken) : "Select token");
   const minReturnBase = parseFriendlyAmount(minReturn, toDecimals);
 
   const handleFlipDirection = () => {
@@ -81,7 +81,7 @@ export function SwapForm({ state, busy, onPropose }: SwapFormProps) {
 
   const handleSetMax = () => {
     if (fromBalance) {
-      setAmount(formatAmount(fromBalance.amount, fromDecimals));
+      setAmount(formatAmountSafe(fromBalance.amount, fromDecimals, actualFromToken, "swap.max"));
     }
   };
 
@@ -110,18 +110,20 @@ export function SwapForm({ state, busy, onPropose }: SwapFormProps) {
     });
   };
 
-  // Filter tokens for selection modal (supports search by symbol or raw principal)
+  // Filter tokens for selection modal. Exclude the token already selected on
+  // the opposite side. A search hit for a valid principal that isn't already
+  // in the list is still added so the user can pick a freshly-typed principal
+  // (the input boundary accepts it but the swap will fail at classification
+  // until it is synced / allowlisted — same as in the unfiltered case).
   const filteredModalTokens = useMemo(() => {
     const query = tokenSearch.trim().toLowerCase();
     const list = allAvailableTokens.filter((principal) => {
-      // Exclude token already selected on the opposite side
       if (tokenModalTarget === "from" && principal === toToken) return false;
       if (tokenModalTarget === "to" && principal === fromToken) return false;
-      const sym = getTokenSymbol(principal, state.balances).toLowerCase();
+      const sym = (state.balances.find((b) => toPrincipalText(b.token.id) === principal)?.token.symbol ?? "").toLowerCase();
       const p = principal.toLowerCase();
       return !query || sym.includes(query) || p.includes(query);
     });
-    // If the query is a valid principal string not in the list, allow adding it
     if (query && query.includes("-") && !list.includes(query)) {
       return [...list, query];
     }
@@ -144,6 +146,8 @@ export function SwapForm({ state, busy, onPropose }: SwapFormProps) {
     !dex ||
     !actualFromToken ||
     !actualToToken ||
+    !fromBalance ||
+    !toBalance ||
     !amount ||
     amountBase <= 0n ||
     !minReturn ||
@@ -154,10 +158,12 @@ export function SwapForm({ state, busy, onPropose }: SwapFormProps) {
     if (!dex) return "No DEX allowlisted";
     if (!actualFromToken) return "Select a token";
     if (!actualToToken) return "Select destination token";
+    if (!fromBalance) return "Sync source token first";
+    if (!toBalance) return "Sync destination token first";
     if (!amount || amountBase <= 0n) return "Enter an amount";
     if (!minReturn || minReturnBase <= 0n) return "Enter minimum return";
     return "Propose Swap (Escalates to Approval)";
-  }, [busy, dex, actualFromToken, actualToToken, amount, amountBase, minReturn, minReturnBase]);
+  }, [busy, dex, actualFromToken, actualToToken, fromBalance, toBalance, amount, amountBase, minReturn, minReturnBase]);
 
   return (
     <div className="surface surface-swap uniswap-widget-container">
@@ -260,7 +266,7 @@ export function SwapForm({ state, busy, onPropose }: SwapFormProps) {
             <span className="uniswap-card-label">Sell</span>
             {fromBalance && (
               <span className="uniswap-balance-info">
-                Balance: {formatAmount(fromBalance.amount, fromDecimals)}{" "}
+                Balance: {formatAmountSafe(fromBalance.amount, fromDecimals, actualFromToken, "swap.sourceBalance")}{" "}
                 <button type="button" className="uniswap-max-btn" onClick={handleSetMax}>
                   MAX
                 </button>
@@ -397,13 +403,15 @@ export function SwapForm({ state, busy, onPropose }: SwapFormProps) {
               ) : (
                 filteredModalTokens.map((principal) => {
                   const bal = state.balances.find((b) => toPrincipalText(b.token.id) === principal);
-                  const symbol = bal ? bal.token.symbol : shortenPrincipal(principal);
+                  const symbol = bal?.token.symbol ?? shortenPrincipal(principal);
+                  const isSynced = bal !== undefined;
                   return (
                     <button
                       type="button"
                       key={principal}
-                      className="uniswap-token-option"
+                      className={`uniswap-token-option ${isSynced ? "" : "is-unsynced"}`}
                       onClick={() => selectModalToken(principal)}
+                      title={isSynced ? undefined : "Sync this token to enable swaps"}
                     >
                       <div className="uniswap-token-option-avatar">
                         {symbol.slice(0, 2).toUpperCase()}
@@ -412,10 +420,12 @@ export function SwapForm({ state, busy, onPropose }: SwapFormProps) {
                         <strong>{symbol}</strong>
                         <span>{shortenPrincipal(principal)}</span>
                       </div>
-                      {bal && (
+                      {isSynced ? (
                         <div className="uniswap-token-option-bal">
-                          {formatAmount(bal.amount, bal.token.decimals)}
+                          {formatAmountSafe(bal.amount, bal.token.decimals, principal, "swap.candidateBalance")}
                         </div>
+                      ) : (
+                        <div className="uniswap-token-option-bal">Sync required</div>
                       )}
                     </button>
                   );
@@ -427,14 +437,4 @@ export function SwapForm({ state, busy, onPropose }: SwapFormProps) {
       )}
     </div>
   );
-}
-
-function getTokenSymbol(principal: string, balances: Balance[]): string {
-  const bal = balances.find((b) => toPrincipalText(b.token.id) === principal);
-  if (bal) return bal.token.symbol;
-  if (principal === "ryjl3-tyaaa-aaaaa-aaaba-cai") return "ICP";
-  if (principal === "mxzaz-hqaaa-aaaar-qaada-cai") return "ckBTC";
-  if (principal === "xevnm-gaaaa-aaaar-qafnq-cai") return "ckUSDC";
-  if (principal === "cngnf-vqaaa-aaaar-qag4q-cai") return "ckUSDT";
-  return shortenPrincipal(principal);
 }

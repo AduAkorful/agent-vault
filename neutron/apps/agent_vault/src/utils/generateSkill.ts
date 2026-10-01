@@ -185,19 +185,19 @@ You have **read and propose** access through the Neutron kernel. The following t
 | Tool Name | Type | Description |
 |-----------|------|-------------|
 | \`get_vault_state\` | Query | Read balances, policy, velocity spend, pending tickets, audit log, settlement status. |
-| \`get_activity_history\` | Query | Paginated audit log (oldest-first). Args: limit (1-1000), offset (0+). |
 | \`evaluate_transfer\` | Update | Preview the classification of a hypothetical transfer WITHOUT settling. Args: token, recipient, amount, reason. Returns tier, fee, balance, and spend utilisation. **Use this before every \`propose_transfer\` to avoid rejected proposals.** |
-| \`propose_transfer\` | Update | Propose an ICRC-1 transfer for policy evaluation. Args: token, recipient, amount, reason. |
+| \`propose_transfer\` | Update | Propose an ICRC-1 transfer for policy evaluation. If Tier 1, settles immediately. If Tier 2, parks an approval ticket. Args: token, recipient, amount, reason. |
+| \`propose_swap\` | Update | Propose an ICRC-1 token swap on an allowlisted DEX/pair. Swaps ALWAYS escalate to owner approval. Args: fromToken, toToken, dex, amount, minReturn, slippageBps, quoteExpiresAt, reason. |
 
-> **Important:** \`propose_swap\`, \`approve_ticket\`, \`reject_ticket\`, \`recover_settlement_lock\`, \`sync_balance\`, and all policy admin methods are NOT available to you. They require owner authentication via the dashboard. The owner can sync token balances through the dashboard UI.
+> **Important:** \`get_activity_history\`, \`approve_ticket\`, \`reject_ticket\`, \`recover_settlement_lock\`, \`sync_balance\`, and all policy admin methods are NOT available to you. They require owner authentication via the dashboard. The owner can sync token balances and review approval tickets through the dashboard UI.
 
 ### Candid Signatures
 
 \`\`\`
 get_vault_state: () -> (variant { ok: VaultState; err: VaultError }) query
-get_activity_history: (limit: nat, offset: nat) -> (variant { ok: [AuditEntry]; err: VaultError }) query
 evaluate_transfer: (token: principal, recipient: principal, amount: nat, reason: text) -> (variant { ok: Evaluation; err: VaultError }) update
 propose_transfer: (token: principal, recipient: principal, amount: nat, reason: text) -> (variant { ok: Outcome; err: VaultError }) update
+propose_swap: (fromToken: principal, toToken: principal, dex: principal, amount: nat, minReturn: nat, slippageBps: nat, quoteExpiresAt: int, reason: text) -> (variant { ok: Outcome; err: VaultError }) update
 \`\`\`
 
 ## Decision Flow
@@ -235,6 +235,19 @@ Before every transfer, follow this exact sequence. Skipping steps leads to rejec
    - \`tier: Autonomous\` + \`settlement.success\` → the transfer settled immediately. Check \`auditId\` for the receipt.
    - \`tier: Escalation\` + \`ticketId\` → the proposal parked as a pending ticket. The owner must approve it via the dashboard.
    - \`tier: Forbidden\` + \`error\` → the proposal was rejected. See the error reference below.
+
+## Swaps
+
+1. **Verify prerequisites:** In \`get_vault_state\`, confirm circuitBreaker is \`false\`, settlementLock is \`null\`, and the from-token is in your allowlisted pairs. Swaps ALWAYS escalate.
+2. **Propose:** Call \`propose_swap(fromToken, toToken, dex, amount, minReturn, slippageBps, quoteExpiresAt, reason)\`.
+   - \`dex\` must be the ICPSwap factory principal.
+   - \`amount\` is in base units of \`fromToken\`.
+   - \`minReturn\` is in base units of \`toToken\`.
+   - \`slippageBps\` is 0–10000 (e.g., 100 = 1% tolerance).
+   - \`quoteExpiresAt\` is a Unix nanosecond timestamp for the quote deadline.
+3. **Interpret the result:**
+   - \`tier: Escalation\` + \`ticketId\` → the swap is parked for owner approval. The owner must approve via the dashboard's Approvals workspace.
+   - \`tier: Forbidden\` + \`error\` → the swap was rejected. See the error reference below.
 
 ## Error Reference
 

@@ -24,7 +24,7 @@ import Principal "mo:core/Principal";
 import Text "mo:core/Text";
 import Time "mo:core/Time";
 import NeutronCapabilities "mo:neutron-capabilities";
-import V "./memory/agentvault/v2";
+import V "./memory/agentvault/v4";
 import P "./vault/Policy";
 import Icrc "./icrc1/Client";
 import IcrcTypes "./icrc1/Types";
@@ -42,13 +42,16 @@ module {
     public type TokenPair = { from : Principal; to : Principal };
     public type TokenLimits = { maxPerTx : Nat; maxHourlySpend : Nat; maxDailySpend : Nat };
     public type TokenLimit = { token : Principal; limits : TokenLimits };
-    public type Allowlists = { recipients : [Principal]; dexes : [Principal]; pairs : [TokenPair] };
+    public type TimeWindow = { start : Nat; end : Nat; days : [Nat] };
+    public type Allowlists = { recipients : [Principal]; dexes : [Principal]; pairs : [TokenPair]; tokenRecipients : [(Principal, [Principal])]};
     public type Policy = {
         limits : [TokenLimit];
         allowlists : Allowlists;
         circuitBreaker : Bool;
         failureThreshold : Nat;
         consecutiveFailures : Nat;
+        allowedHours : [(Principal, TimeWindow)];
+        approvalTimelock : Nat;
     };
     public type TransferProposal = { token : Principal; recipient : Principal; amount : Nat; reason : Text };
     public type SwapProposal = {
@@ -98,6 +101,8 @@ module {
         #ActivePolicyDeletion;
         #SwapRequiresApproval;
         #TooManyPendingTickets;
+        #OutsideAllowedHours;
+        #TimelockInProgress;
     };
     public type PolicyEvaluation = {
         profileId : Nat;
@@ -119,6 +124,7 @@ module {
         policyError : ?VaultError;
         evaluation : ?PolicyEvaluation;
         status : TicketStatus;
+        timelockUntil : ?Int;
     };
     public type AuditEntry = {
         id : Nat;
@@ -163,6 +169,7 @@ module {
         settlementLock : ?SettlementLock;
         dexConfig : DexConfig;
         depositAccount : DepositAccount;
+        recipientLabels : [(Principal, Text)];
     };
 
     // Monomorphic result variants — one per success payload. The schema
@@ -195,6 +202,18 @@ module {
     public type EvaluationResult = { #ok : Evaluation; #err : VaultError };
     public type IdResult = { #ok : Nat; #err : VaultError };
     public type UnitResult = { #ok : (); #err : VaultError };
+
+    // TokenValuation: per-token USD valuation. `usdValue` is denominated in
+    // the anchor ledger's base units; `usdDecimals` is that ledger's live
+    // `icrc1_decimals`. The frontend never assumes a fixed divisor.
+    public type TokenValuation = {
+        token : Principal;
+        balance : Nat;
+        usdValue : Nat;
+        usdDecimals : Nat8;
+        balanceDecimals : Nat8;
+    };
+    public type PortfolioValueResult = { #ok : [TokenValuation]; #err : VaultError };
 
     public type AppBackendEnvironment = {
         stable_memory : { agentvault : V.Mem };
@@ -838,7 +857,7 @@ module {
             let hourly = P.spendIn(mem.spend, token, now, 3_600_000_000_000);
             let daily = P.spendIn(mem.spend, token, now, 86_400_000_000_000);
             let debit = amountOf(action) + fee;
-            let (tier, policyError) = P.classify(action, profile.policy, fee, hourly, daily);
+            let (tier, policyError) = P.classify(action, profile.policy, fee, hourly, daily, now);
             let evaluation : PolicyEvaluation = evaluationFor(profile, tier, policyError, ?fee, ?hourly, ?daily, ?(hourly + debit), ?(daily + debit));
             if (tier == #Forbidden) {
                 let id = addAuditWithEvaluation(action, tier, policyError, ?evaluation, null, null, "policy rejected");
@@ -918,6 +937,7 @@ module {
                 };
                 dexConfig = mem.dexConfig;
                 depositAccount = { owner = calls.canister_principal; subaccount = Blob.toArray(mem.vaultSubaccount) };
+                recipientLabels = mem.recipientLabels;
             });
         };
 
@@ -988,7 +1008,7 @@ module {
             let hourly = P.spendIn(mem.spend, token, now, 3_600_000_000_000);
             let daily = P.spendIn(mem.spend, token, now, 86_400_000_000_000);
             let debit = amount + fee;
-            let (tier, policyError) = P.classify(#transfer({ token; recipient; amount; reason }), profile.policy, fee, hourly, daily);
+            let (tier, policyError) = P.classify(#transfer({ token; recipient; amount; reason }), profile.policy, fee, hourly, daily, now);
             let limits = P.limitFor(profile.policy, token);
             func vaultBalance() : Nat {
                 for (b in mem.liveBalances.vals()) {
@@ -1013,10 +1033,26 @@ module {
         };
 
         // Swaps are real but never autonomous: every proposal parks as an owner
-        // approval ticket before the ICPSwap round trip can begin. It is not
-        // exposed as an agent tool in v1.
+        // approval ticket before the ICPSwap round trip can begin. Swaps are
+        // exposed as the 4th agent entrypoint (`propose_swap`); they always
+        // escalate so the agent can reason about swap intent without ever
+        // settling funds.
         public func /*update*/proposeSwap(fromToken : Principal, toToken : Principal, dex : Principal, amount : Nat, minReturn : Nat, slippageBps : Nat, quoteExpiresAt : Int, reason : Text) : async* OutcomeResult {
             #ok(await* proposeAction(#swap({ fromToken; toToken; dex; amount; minReturn; slippageBps; quoteExpiresAt; reason })));
+        };
+
+        // Owner-only batch transfer: submit multiple ICRC-1 transfers in a single
+        // call. Each transfer is classified independently against the active policy.
+        // Autonomous transfers settle immediately; escalated ones park as tickets.
+        // The batch proceeds sequentially (each proposal completes before the next)
+        // so velocity spend and settlement locks are observed correctly.
+        public func /*update*/proposeTransfers(transfers : [TransferProposal]) : async* [Outcome] {
+            var results : [Outcome] = [];
+            for (p in transfers.vals()) {
+                let outcome = await* proposeAction(#transfer(p));
+                results := Array.append(results, [outcome]);
+            };
+            results;
         };
 
         // ----- approval lifecycle (update; owner-only — excluded from agent_entrypoints) -----
@@ -1053,7 +1089,7 @@ module {
             let hourly = P.spendIn(mem.spend, token, now, 3_600_000_000_000);
             let daily = P.spendIn(mem.spend, token, now, 86_400_000_000_000);
             let debit = amountOf(ticket.action) + fee;
-            let (tier, currentError) = P.classify(ticket.action, profile.policy, fee, hourly, daily);
+            let (tier, currentError) = P.classify(ticket.action, profile.policy, fee, hourly, daily, now);
             let currentEvaluation = evaluationFor(profile, tier, currentError, ?fee, ?hourly, ?daily, ?(hourly + debit), ?(daily + debit));
             if (tier == #Forbidden) {
                 ignore addAuditWithEvaluation(ticket.action, tier, currentError, ?currentEvaluation, null, ?ticketId, "approval blocked: active profile no longer permits this action");
@@ -1062,6 +1098,27 @@ module {
             if (tier != #Escalation or currentError != ticket.policyError) {
                 ignore addAuditWithEvaluation(ticket.action, tier, currentError, ?currentEvaluation, null, ?ticketId, "approval blocked: profile budget or escalation condition changed");
                 return #err(switch (currentError) { case (?e) e; case (null) #AlreadyResolved });
+            };
+            // If the active policy has an approval timelock > 0, defer settlement.
+            // The ticket is marked timelocked; the owner can cancel it during the
+            // deferral window, or it can be executed after the timelock expires via
+            // executeTimelockedTicket. No funds move during the deferral.
+            if (profile.policy.approvalTimelock > 0) {
+                let timelockNanos = profile.policy.approvalTimelock * 1_000_000_000;
+                let timelockUntil = now + timelockNanos;
+                mem.settlementTickets := Array.map<Ticket, Ticket>(mem.settlementTickets, func(t) {
+                    if (t.id == ticketId) ({
+                        id = t.id;
+                        action = t.action;
+                        createdAt = t.createdAt;
+                        policyError = t.policyError;
+                        evaluation = t.evaluation;
+                        status = t.status;
+                        timelockUntil = ?timelockUntil;
+                    }) else t
+                });
+                let auditId = addAuditWithEvaluation(ticket.action, tier, currentError, ?currentEvaluation, null, ?ticketId, "owner approved; settlement deferred until timelock expires");
+                return #ok({ tier; error = null; ticketId = ?ticketId; auditId; settlement = null });
             };
             mem.settlementInFlight := true;
             mem.settlementLock := ?{ action = ticket.action; startedAt = Time.now(); ticketId = ?ticketId; profile = ?{ id = profile.id; name = profile.name; revision = profile.revision }; intent = null };
@@ -1104,8 +1161,104 @@ module {
             };
             if (not found) return #err(#TicketNotFound);
             if (not pendingTicket) return #err(#AlreadyResolved);
-            mem.settlementTickets := retainTickets(Array.map<Ticket, Ticket>(mem.settlementTickets, func(t) { if (t.id == ticketId) ({ id = t.id; action = t.action; createdAt = t.createdAt; policyError = t.policyError; evaluation = t.evaluation; status = #rejected(reason) }) else t }));
+            mem.settlementTickets := retainTickets(Array.map<Ticket, Ticket>(mem.settlementTickets, func(t) { if (t.id == ticketId) ({ id = t.id; action = t.action; createdAt = t.createdAt; policyError = t.policyError; evaluation = t.evaluation; status = #rejected(reason); timelockUntil = null }) else t }));
             let id = addAudit(switch (action) { case (?a) a; case (null) return #err(#TicketNotFound) }, #Escalation, null, null, ?ticketId, "owner rejected: " # reason);
+            #ok(id);
+        };
+
+        // Execute a ticket whose approval timelock has expired. Re-runs the
+        // same re-classification + settlement path as approveTicket, but only
+        // if the timelock window has elapsed. This lets the owner approve
+        // immediately (via approveTicket) and walk away; settlement runs later
+        // with all the same safety guards.
+        public func /*update*/executeTimelockedTicket(ticketId : Nat) : async* OutcomeResult {
+            var found : ?Ticket = null;
+            for (ticket in mem.settlementTickets.vals()) { if (ticket.id == ticketId) found := ?ticket };
+            let ticket = switch (found) { case (null) return #err(#TicketNotFound); case (?value) value };
+            if (ticket.status != #pending) return #err(#AlreadyResolved);
+            // Only timelocked tickets are eligible here.
+            let timelockUntil = switch (ticket.timelockUntil) { case (null) return #err(#TimelockInProgress); case (?t) t };
+            if (Time.now() < timelockUntil) return #err(#TimelockInProgress);
+            if (mem.settlementInFlight) return #err(#SettlementInFlight);
+            let profile = switch (activeProfile()) {
+                case null return #err(#PolicyProfileNotFound);
+                case (?value) value;
+            };
+            switch (ticket.evaluation) {
+                case null return #err(#PolicyRevisionChanged);
+                case (?evaluation) {
+                    if (evaluation.profileId != profile.id) return #err(#PolicyProfileNotActive);
+                    if (evaluation.revision != profile.revision) return #err(#PolicyRevisionChanged);
+                };
+            };
+            // Re-classify at execution time (same as approveTicket).
+            let token = spendToken(ticket.action);
+            let fee = switch (await* classificationFee(ticket.action)) {
+                case (#ok(value)) value;
+                case (#err(error)) return #err(error);
+            };
+            let now = Time.now();
+            let hourly = P.spendIn(mem.spend, token, now, 3_600_000_000_000);
+            let daily = P.spendIn(mem.spend, token, now, 86_400_000_000_000);
+            let debit = amountOf(ticket.action) + fee;
+            let (tier, currentError) = P.classify(ticket.action, profile.policy, fee, hourly, daily, now);
+            let currentEvaluation = evaluationFor(profile, tier, currentError, ?fee, ?hourly, ?daily, ?(hourly + debit), ?(daily + debit));
+            if (tier == #Forbidden) {
+                ignore addAuditWithEvaluation(ticket.action, tier, currentError, ?currentEvaluation, null, ?ticketId, "timelock execution blocked: active profile no longer permits this action");
+                return #err(switch (currentError) { case (?e) e; case (null) #CircuitBreakerActive });
+            };
+            if (tier != #Escalation or currentError != ticket.policyError) {
+                ignore addAuditWithEvaluation(ticket.action, tier, currentError, ?currentEvaluation, null, ?ticketId, "timelock execution blocked: profile budget or escalation condition changed");
+                return #err(switch (currentError) { case (?e) e; case (null) #AlreadyResolved });
+            };
+            mem.settlementInFlight := true;
+            mem.settlementLock := ?{ action = ticket.action; startedAt = now; ticketId = ?ticketId; profile = ?{ id = profile.id; name = profile.name; revision = profile.revision }; intent = null };
+            let result = await* settle(ticket.action, fee);
+            switch (result) {
+                case (#success(receipt)) {
+                    mem.settlementTickets := retainTickets(Array.map<Ticket, Ticket>(mem.settlementTickets, func(t) { if (t.id == ticketId) ({ id = t.id; action = t.action; createdAt = t.createdAt; policyError = t.policyError; evaluation = t.evaluation; status = #approved(receipt); timelockUntil = null }) else t }));
+                    mem.spend := Array.concat(mem.spend, [{ timestamp = Time.now(); token; amount = amountOf(ticket.action); fee = receiptFee(receipt) }]);
+                    ignore syncActivePolicyIfCurrent(profile.id, profile.revision, P.recordSuccess(profile.policy));
+                    pruneSpend(Time.now());
+                };
+                case (#failure(_)) { ignore syncActivePolicyIfCurrent(profile.id, profile.revision, P.recordFailure(profile.policy)) };
+            };
+            let id = addAuditWithEvaluation(ticket.action, tier, currentError, ?currentEvaluation, ?result, ?ticketId,
+                switch (result) { case (#success(_)) "timelocked ticket executed and settled"; case (#failure(_)) "timelock execution failed" });
+            switch (result) {
+                case (#success(_)) { mem.settlementInFlight := false; mem.settlementLock := null };
+                case (#failure(error)) {
+                    if (not error.partial) { mem.settlementInFlight := false; mem.settlementLock := null };
+                };
+            };
+            switch (result) {
+                case (#success(_)) #ok({ tier; error = null; ticketId = ?ticketId; auditId = id; settlement = ?result });
+                case (#failure(e)) {
+                    if (e.code == "INSUFFICIENT_BALANCE" and not e.partial) #err(#InsufficientBalance) else #err(#ExternalFailure(e));
+                };
+            };
+        };
+
+        // Cancel a ticket during its approval timelock window. The owner can
+        // revoke an approved-but-not-yet-executed proposal before it settles.
+        public func /*update*/cancelTimelockedTicket(ticketId : Nat, reason : Text) : IdResult {
+            if (Text.size(reason) > 2_000) return #err(#InvalidPolicy);
+            var found = false;
+            var action : ?Action = null;
+            for (ticket in mem.settlementTickets.vals()) {
+                if (ticket.id == ticketId) {
+                    found := true;
+                    action := ?ticket.action;
+                    if (ticket.status != #pending or ticket.timelockUntil == null) {
+                        return #err(#AlreadyResolved);
+                    };
+                };
+            };
+            if (not found) return #err(#TicketNotFound);
+            mem.settlementTickets := retainTickets(Array.map<Ticket, Ticket>(mem.settlementTickets, func(t) {
+                if (t.id == ticketId) ({ id = t.id; action = t.action; createdAt = t.createdAt; policyError = t.policyError; evaluation = t.evaluation; status = #rejected(reason); timelockUntil = null }) else t
+            }));
+            let id = addAudit(switch (action) { case (?a) a; case (null) return #err(#TicketNotFound) }, #Escalation, null, null, ?ticketId, "owner canceled timelocked ticket: " # reason);
             #ok(id);
         };
 
@@ -1553,6 +1706,82 @@ module {
                 };
             }
         };
+
+        public func /*update*/setRecipientLabels(labels : [(Principal, Text)]) : UnitResult {
+            mem.recipientLabels := Array.map<(Principal, Text), (Principal, Text)>(labels, func(pair) {
+                let (p, t) = pair;
+                (p, Text.trim(t, #space));
+            });
+            #ok(());
+        };
+
+        // USD portfolio valuation derived from live ICPSwap pool reserves.
+        // ckUSDC is the USD anchor (1 ckUSDC ≈ $1); every other token is quoted
+        // against ckUSDC via its ICPSwap pool. No hardcoded prices — every rate
+        // is read from the live pool at call time, and the anchor ledger's
+        // `icrc1_decimals` is read at the same time so `usdValue` carries the
+        // exact decimals of the quote unit (no assumption that ckUSDC=6).
+        // Tokens without a discoverable pool or whose anchor decimals are
+        // unreadable return usdValue = 0 (with usdDecimals = 0) so the dashboard
+        // can render an honest "price unavailable" state.
+        public func /*update*/getPortfolioValue() : async* PortfolioValueResult {
+            let ckusdc = Principal.fromText("xevnm-gaaaa-aaaar-qafnq-cai");
+            // Cache ckUSDC standards so we only query its ledger once.
+            let ckUsdcStandards = switch (Icrc.decodeSupportedStandards(await* calls.call(Icrc.supportedStandardsRequest(ckusdc)))) {
+                case (#ok(value)) value;
+                case (#err(_)) { return #ok([]) };
+            };
+            let ckusdcStandard = if (hasStandard(ckUsdcStandards, "ICRC-2")) "ICRC2" else "ICRC1";
+            // Read the anchor ledger's decimals at call time — the quote output
+            // is denominated in this ledger's base units, and the dashboard needs
+            // the matching decimals to render it. Refuse to publish a valuation
+            // without a verified decimals value: usdDecimals = 0 means "unknown".
+            let ckUsdcDecimals : Nat8 = switch (Icrc.decodeDecimals(await* calls.call(Icrc.decimalsRequest(ckusdc)))) {
+                case (#ok(value)) value;
+                case (#err(_)) 0;
+            };
+            var results : [TokenValuation] = [];
+            for (balance in mem.liveBalances.vals()) {
+                let balanceDecimals = balance.token.decimals;
+                var usdValue : Nat = 0;
+                var usdDecimals : Nat8 = ckUsdcDecimals;
+                if (balance.amount > 0 and balance.token.id != ckusdc) {
+                    let standards = switch (Icrc.decodeSupportedStandards(await* calls.call(Icrc.supportedStandardsRequest(balance.token.id)))) {
+                        case (#ok(value)) ?value;
+                        case (#err(_)) null;
+                    };
+                    switch (standards) {
+                        case (?s) {
+                            let standard = if (hasStandard(s, "ICRC-2")) "ICRC2" else "ICRC1";
+                            let poolData = switch (Icrc.decodePool(await* calls.call(Icrc.getPoolRequest(mem.dexConfig.factory, { fee = mem.dexConfig.feeTier; token0 = { address = Principal.toText(balance.token.id); standard }; token1 = { address = Principal.toText(ckusdc); standard = ckusdcStandard } })))) {
+                                case (#ok(#ok(value))) ?value;
+                                case _ null;
+                            };
+                            switch (poolData) {
+                                case (?data) {
+                                    let pool = data.canisterId;
+                                    let zeroForOne = data.token0.address == Principal.toText(balance.token.id);
+                                    let quoted = switch (Icrc.decodeDexNat(await* calls.call(Icrc.quoteRequest(pool, { amountIn = Nat.toText(balance.amount); amountOutMinimum = "0"; zeroForOne }), "quote")) {
+                                        case (#ok(#ok(value))) ?value;
+                                        case _ null;
+                                    };
+                                    switch (quoted) {
+                                        case (?amountOut) usdValue := amountOut;
+                                        case null {};
+                                    };
+                                };
+                                case null {};
+                            };
+                        };
+                        case null {};
+                    };
+                } else if (balance.token.id == ckusdc) {
+                    usdValue := balance.amount;
+                };
+                results := Array.concat(results, [{ token = balance.token.id; balance = balance.amount; usdValue; usdDecimals; balanceDecimals }]);
+            };
+            #ok(results);
+        };
     };
 /*---NEUTRON GENERATED BEGIN---*/
 
@@ -1580,11 +1809,20 @@ public type evaluateTransfer_Output = EvaluationResult;
 public type proposeSwap_Input = (fromToken : Principal, toToken : Principal, dex : Principal, amount : Nat, minReturn : Nat, slippageBps : Nat, quoteExpiresAt : Int, reason : Text);
 public type proposeSwap_Output = OutcomeResult;
 
+public type proposeTransfers_Input = (transfers : [TransferProposal]);
+public type proposeTransfers_Output = [Outcome];
+
 public type approveTicket_Input = (ticketId : Nat);
 public type approveTicket_Output = OutcomeResult;
 
 public type rejectTicket_Input = (ticketId : Nat, reason : Text);
 public type rejectTicket_Output = IdResult;
+
+public type executeTimelockedTicket_Input = (ticketId : Nat);
+public type executeTimelockedTicket_Output = OutcomeResult;
+
+public type cancelTimelockedTicket_Input = (ticketId : Nat, reason : Text);
+public type cancelTimelockedTicket_Output = IdResult;
 
 public type setDexConfig_Input = (next : DexConfig);
 public type setDexConfig_Output = UnitResult;
@@ -1609,6 +1847,12 @@ public type setPolicy_Output = UnitResult;
 
 public type setCircuitBreaker_Input = (active : Bool);
 public type setCircuitBreaker_Output = UnitResult;
+
+public type setRecipientLabels_Input = (labels : [(Principal, Text)]);
+public type setRecipientLabels_Output = UnitResult;
+
+public type getPortfolioValue_Input = ();
+public type getPortfolioValue_Output = PortfolioValueResult;
 
 /*---NEUTRON GENERATED END---*/
 }

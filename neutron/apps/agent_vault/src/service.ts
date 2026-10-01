@@ -36,16 +36,55 @@ const emptyInputSchema: JsonObject = {
 // Principal inputs: validated raw strings (kernel handles Candid encoding).
 const principalPattern = PRINCIPAL_PATTERN.source;
 
-const activityInputSchema: JsonObject = {
+const proposeSwapInputSchema: JsonObject = {
   type: "object",
-  required: ["limit", "offset"],
+  required: ["fromToken", "toToken", "dex", "amount", "minReturn", "slippageBps", "quoteExpiresAt", "reason"],
   properties: {
-    limit: { type: "integer", minimum: 1, maximum: 1000 },
-    offset: { type: "integer", minimum: 0 },
+    fromToken: {
+      type: "string",
+      pattern: principalPattern,
+      description: "The ICRC-2 token ledger to swap from.",
+    },
+    toToken: {
+      type: "string",
+      pattern: principalPattern,
+      description: "The ICRC-1 token ledger to swap to.",
+    },
+    dex: {
+      type: "string",
+      pattern: principalPattern,
+      description: "The DEX factory principal (must be allowlisted).",
+    },
+    amount: {
+      type: "string",
+      pattern: "^[1-9][0-9]*$",
+      description: "Swap input amount in base units of the from-token. Passed as a decimal string for large values.",
+    },
+    minReturn: {
+      type: "string",
+      pattern: "^[0-9]+$",
+      description: "Minimum output amount in base units of the to-token. Passed as a decimal string.",
+    },
+    slippageBps: {
+      type: "integer",
+      minimum: 0,
+      maximum: 10000,
+      description: "Slippage tolerance in basis points (0–10000).",
+    },
+    quoteExpiresAt: {
+      type: "integer",
+      minimum: 0,
+      description: "Unix nanosecond timestamp when the quote expires.",
+    },
+    reason: {
+      type: "string",
+      minLength: 1,
+      maxLength: 500,
+      description: "Free-text justification for the swap proposal.",
+    },
   },
   additionalProperties: false,
 };
-
 
 const proposeTransferInputSchema: JsonObject = {
   type: "object",
@@ -83,18 +122,6 @@ const proposeTransferInputSchema: JsonObject = {
 const vaultStateOutputSchema: JsonObject = {
   type: "object",
   description: "Full vault state snapshot: balances, policy, spend windows, pending tickets, audit log, settlement status.",
-};
-
-const activityOutputSchema: JsonObject = {
-  type: "array",
-  description: "Array of AuditEntry records (oldest-first storage order).",
-  items: { type: "object" },
-};
-
-const pendingOutputSchema: JsonObject = {
-  type: "array",
-  description: "Array of pending Ticket records awaiting owner approval.",
-  items: { type: "object" },
 };
 
 const evaluationOutputSchema: JsonObject = {
@@ -159,25 +186,35 @@ exposeTool(
   async () => unwrapResult(await querySelf("getVaultState", [null])),
 );
 
-// 2. get_activity_history — paginated audit feed.
+// 2. propose_swap — submit a swap proposal (always escalates to owner approval).
 exposeTool(
-  "get_activity_history",
+  "propose_swap",
   {
-    title: "Read Agent Vault Activity History",
+    title: "Propose Token Swap",
     description:
-      "Read paginated audit entries (oldest-first). Returns up to `limit` records starting at `offset`.",
-    inputSchema: activityInputSchema,
-    outputSchema: activityOutputSchema,
-    annotations: { "neutron:effects": ["read"] },
+      "Propose an ICRC-1 token swap on an allowlisted DEX and pair. Swaps always escalate to owner approval — they never settle autonomously. The result includes the classification tier, a durable ticket ID for the approvals inbox, and the audit entry ID.",
+    inputSchema: proposeSwapInputSchema,
+    outputSchema: outcomeOutputSchema,
+    annotations: { "neutron:effects": ["write", "network"] },
   },
   async (args) => {
-    const limit = requirePositiveInt(args.limit, "limit", 1000);
-    const offset = requireNonNegativeInt(args.offset, "offset");
-    return unwrapResult(
-      // Nat args must cross the kernel as decimal strings (icblast encoding),
-      // else AJV rejects the self-call before the backend runs.
-      await querySelf("getActivityHistory", [[String(limit), String(offset)]]),
+    const fromToken = requirePrincipalString(args.fromToken, "fromToken");
+    const toToken = requirePrincipalString(args.toToken, "toToken");
+    const dex = requirePrincipalString(args.dex, "dex");
+    const amount = requireAmountString(args.amount, "amount");
+    const minReturn = requireNonNegativeAmountString(args.minReturn, "minReturn");
+    const slippageBps = requireNonNegativeInt(args.slippageBps, "slippageBps");
+    const quoteExpiresAt = requireNonNegativeInt(args.quoteExpiresAt, "quoteExpiresAt");
+    const reason = requireBoundedText(args.reason, "reason", 500);
+    const result = unwrapResult(
+      await updateSelf("proposeSwap", [[
+        fromToken, toToken, dex,
+        amount, minReturn, String(slippageBps),
+        String(quoteExpiresAt), reason,
+      ]]),
     );
+    await publishChange();
+    return result;
   },
 );
 
@@ -279,17 +316,6 @@ function requireBoundedText(
     throw new Error(`${label} must be 1-${maxLen} characters`);
   }
   return trimmed;
-}
-
-function requirePositiveInt(
-  value: JsonValue | undefined,
-  label: string,
-  max: number,
-): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > max) {
-    throw new Error(`${label} must be an integer between 1 and ${max}`);
-  }
-  return value;
 }
 
 function requireNonNegativeInt(
